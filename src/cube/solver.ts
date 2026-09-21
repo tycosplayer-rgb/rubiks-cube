@@ -1,6 +1,18 @@
-import Cube from 'cubejs';
+import cubejsImport from 'cubejs';
 import type { LayerMove } from './types';
 import { invertMove, parseAlgorithm, layerMoveToCubejs } from './notation';
+
+// CJS/ESM interop: Vite may wrap the constructor as { default: Cube }
+type CubeClass = {
+  new (): {
+    move(algorithm: string): unknown;
+    solve(maxDepth?: number): string;
+  };
+  initSolver(): void;
+  scramble(): string;
+};
+const Cube = ((cubejsImport as unknown as { default?: CubeClass }).default ??
+  cubejsImport) as CubeClass;
 
 let solverReady = false;
 let solverPromise: Promise<void> | null = null;
@@ -26,7 +38,7 @@ export function isSolverReady(): boolean {
 
 /** Track parallel cubejs state for 3×3 */
 export class CubejsTracker {
-  private cube: Cube;
+  private cube: InstanceType<CubeClass>;
 
   constructor() {
     this.cube = new Cube();

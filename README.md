@@ -4,9 +4,14 @@
 
 ## 在线体验
 
-**GitHub Pages：** https://tycosplayer-rgb.github.io/rubiks-cube/
+| 入口 | URL | 说明 |
+|------|-----|------|
+| **推荐 · jsDelivr CDN** | https://cdn.jsdelivr.net/gh/tycosplayer-rgb/rubiks-cube@cdn/ | 走 CDN，通常比 github.io 更易在中国大陆打开 |
+| **备用隧道（临时）** | https://flat-mails-think.loca.lt/ | localtunnel；机器在线时可用，刷新后域名可能变化 |
+| GitHub Pages | https://tycosplayer-rgb.github.io/rubiks-cube/ | **在中国大陆可能被拦截 / 无法打开** |
+| 仓库 | https://github.com/tycosplayer-rgb/rubiks-cube | 源码 |
 
-仓库：https://github.com/tycosplayer-rgb/rubiks-cube
+> 若 github.io 打不开，请优先使用 **jsDelivr** 链接。Cloudflare Pages / Netlify / Vercel 需账号授权后可再挂更稳的生产域名。
 
 ## 功能
 
@@ -35,14 +40,16 @@ npm run build
 # 产物在 dist/，可用 npm run preview 预览
 ```
 
-GitHub Pages 的 `base` 为 `/rubiks-cube/`（见 `vite.config.ts`）。
+`vite.config.ts` 使用相对路径 `base: './'`，可部署到任意根路径或子路径（含 GitHub Pages `/rubiks-cube/`）。
+
+内置 Vite 插件修复 `cubejs` 在浏览器 ESM 下 `this.Cube` 为 undefined 导致白屏/仅背景的崩溃。
 
 ## 求解器限制
 
 | 阶数 | 求解方式 | 说明 |
 |------|----------|------|
 | 3×3 | Kociemba / cubejs | 根据当前状态求解，支持打乱后继续手动拧再还原 |
-| 2×2、4×4～7×7 | 历史逆序 | 将自上次「复位/切换阶数」以来的所有层转逆序播放；**不是**通用最优解。若只依赖此路径，请避免在未复位时做无法用历史覆盖的操作预期之外的状态（正常打乱+手动+逆序即可复原） |
+| 2×2、4×4～7×7 | 历史逆序 | 将自上次「复位/切换阶数」以来的所有层转逆序播放；**不是**通用最优解 |
 
 首次加载 3×3 求解器时会在后台初始化（约 1–2 秒），之后求解通常很快。
 
