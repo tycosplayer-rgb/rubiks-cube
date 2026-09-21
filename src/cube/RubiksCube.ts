@@ -197,23 +197,27 @@ export class RubiksCube {
       const targetAngle = (turns * Math.PI) / 2;
       const duration = (Math.abs(turns) === 2 ? 220 : 160) / this.animSpeed;
       const start = performance.now();
-      let current = 0;
+
+      const setPivotAngle = (angle: number) => {
+        // Absolute euler — pivot always stays scale (1,1,1); no delta accumulation.
+        if (axis === 'x') this.pivot.rotation.set(angle, 0, 0);
+        else if (axis === 'y') this.pivot.rotation.set(0, angle, 0);
+        else this.pivot.rotation.set(0, 0, angle);
+        this.pivot.scale.set(1, 1, 1);
+      };
 
       const tick = (now: number) => {
         const t = Math.min(1, (now - start) / duration);
         const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-        const angle = targetAngle * eased;
-        const delta = angle - current;
-        current = angle;
-        if (axis === 'x') this.pivot.rotateX(delta);
-        else if (axis === 'y') this.pivot.rotateY(delta);
-        else this.pivot.rotateZ(delta);
+        setPivotAngle(targetAngle * eased);
 
         if (t < 1) {
           requestAnimationFrame(tick);
         } else {
-          // Bake world pose into group-local, force uniform scale, snap to grid.
+          // Exact final angle, then bake world pose into group-local.
+          setPivotAngle(targetAngle);
           this.group.updateMatrixWorld(true);
+
           for (const c of selected) {
             this.reparentUniform(c.mesh, this.group);
             this.snapCubie(c);
@@ -221,6 +225,7 @@ export class RubiksCube {
           }
           this.pivot.rotation.set(0, 0, 0);
           this.pivot.scale.set(1, 1, 1);
+          this.enforceUniformScales();
 
           if (record) {
             this.history.push({ ...move });
@@ -240,35 +245,48 @@ export class RubiksCube {
   }
 
   /**
-   * Reparent while baking world position/quaternion into local space and
-   * forcing uniform scale (1,1,1). Avoids Object3D.attach matrix decompose,
-   * which can inject non-uniform scale after compound 90° turns.
+   * Reparent by baking world matrix → parent-local, then forcing scale (1,1,1).
+   * Never use Object3D.attach: its matrix decompose can inject non-uniform scale
+   * (especially after a singular orientation snap), stretching cubies into sticks.
    */
   private reparentUniform(object: THREE.Object3D, newParent: THREE.Object3D): void {
     object.updateWorldMatrix(true, false);
     newParent.updateWorldMatrix(true, false);
 
-    const worldPos = new THREE.Vector3();
-    const worldQuat = new THREE.Quaternion();
-    object.getWorldPosition(worldPos);
-    object.getWorldQuaternion(worldQuat);
+    // Capture world pose before the parent change.
+    const worldMatrix = object.matrixWorld.clone();
+    if (object.parent !== newParent) {
+      newParent.add(object);
+    }
 
-    newParent.add(object);
+    // local = inv(parent.matrixWorld) * object.matrixWorld
+    const local = new THREE.Matrix4()
+      .copy(newParent.matrixWorld)
+      .invert()
+      .multiply(worldMatrix);
 
-    const parentPos = new THREE.Vector3();
-    const parentQuat = new THREE.Quaternion();
-    const parentScale = new THREE.Vector3();
-    newParent.matrixWorld.decompose(parentPos, parentQuat, parentScale);
+    const pos = new THREE.Vector3();
+    const quat = new THREE.Quaternion();
+    const scl = new THREE.Vector3();
+    local.decompose(pos, quat, scl);
 
-    const invParentQuat = parentQuat.clone().invert();
-    object.position.copy(worldPos).sub(parentPos).applyQuaternion(invParentQuat);
-    // Parent of cubies must stay uniformly scaled at 1; still divide defensively.
-    if (Math.abs(parentScale.x) > 1e-8) object.position.x /= parentScale.x;
-    if (Math.abs(parentScale.y) > 1e-8) object.position.y /= parentScale.y;
-    if (Math.abs(parentScale.z) > 1e-8) object.position.z /= parentScale.z;
-    object.quaternion.copy(invParentQuat.multiply(worldQuat));
+    object.position.copy(pos);
+    object.quaternion.copy(quat);
+    // Critical: discard decomposed scale entirely — keep cubies cube-shaped.
     object.scale.set(1, 1, 1);
     object.updateMatrix();
+  }
+
+  /** Safety net: every cubie must stay at uniform scale 1. */
+  private enforceUniformScales(): void {
+    for (const c of this.cubies) {
+      const s = c.mesh.scale;
+      if (s.x !== 1 || s.y !== 1 || s.z !== 1) {
+        s.set(1, 1, 1);
+        c.mesh.updateMatrix();
+      }
+    }
+    this.pivot.scale.set(1, 1, 1);
   }
 
   private snapCubie(c: Cubie): void {
