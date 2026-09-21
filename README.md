@@ -6,12 +6,15 @@
 
 | 入口 | URL | 说明 |
 |------|-----|------|
-| **推荐 · jsDelivr CDN** | https://cdn.jsdelivr.net/gh/tycosplayer-rgb/rubiks-cube@cdn/ | 走 CDN，通常比 github.io 更易在中国大陆打开 |
-| **备用隧道（临时）** | https://flat-mails-think.loca.lt/ | localtunnel；机器在线时可用，刷新后域名可能变化 |
-| GitHub Pages | https://tycosplayer-rgb.github.io/rubiks-cube/ | **在中国大陆可能被拦截 / 无法打开** |
+| **推荐（非 github.io）** | https://98amcq-ip-34-193-108-177.tunnelmole.net/ | Tunnelmole HTTPS 隧道；当前 box 在线时可用 |
+| **备用隧道** | https://436a2cc49595929b-34-193-125-207.serveousercontent.com/ | Serveo HTTPS |
+| **备用隧道** | https://weak-months-give.loca.lt/ | localtunnel（浏览器可能有确认页） |
+| GitHub Pages | https://tycosplayer-rgb.github.io/rubiks-cube/ | 已同步修复；**在中国大陆可能被拦截 / 无法打开** |
 | 仓库 | https://github.com/tycosplayer-rgb/rubiks-cube | 源码 |
 
-> 若 github.io 打不开，请优先使用 **jsDelivr** 链接。Cloudflare Pages / Netlify / Vercel 需账号授权后可再挂更稳的生产域名。
+> 若 github.io 打不开，请用上方隧道链接。Cloudflare Pages / Netlify / Vercel 需登录授权后可挂长期生产域名（当前环境无这些平台的 API token）。cloudflared quick tunnel 当前被限流（429）。
+
+静态产物分支（供镜像/自建）：`cdn` 分支根目录为 `dist/` 内容。
 
 ## 功能
 
@@ -42,7 +45,7 @@ npm run build
 
 `vite.config.ts` 使用相对路径 `base: './'`，可部署到任意根路径或子路径（含 GitHub Pages `/rubiks-cube/`）。
 
-内置 Vite 插件修复 `cubejs` 在浏览器 ESM 下 `this.Cube` 为 undefined 导致白屏/仅背景的崩溃。
+内置 Vite 插件将 `cubejs` 的 `this.Cube` 改写为 `globalThis.Cube`，避免浏览器 ESM 下白屏（仅暗色背景、无 HUD/魔方）。
 
 ## 求解器限制
 
