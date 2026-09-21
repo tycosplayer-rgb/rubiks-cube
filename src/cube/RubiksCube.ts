@@ -155,8 +155,11 @@ export class RubiksCube {
     const sticker = (face: FaceId) =>
       new THREE.MeshStandardMaterial({
         color: FACE_COLORS[face],
-        roughness: 0.42,
-        metalness: 0.08,
+        roughness: 0.45,
+        metalness: 0.06,
+        // Keep face color readable from any orbit angle (esp. underside)
+        emissive: FACE_COLORS[face],
+        emissiveIntensity: 0.22,
       });
 
     // BoxGeometry: +X -X +Y -Y +Z -Z

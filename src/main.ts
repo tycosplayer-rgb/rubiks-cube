@@ -85,24 +85,45 @@ controls.minDistance = 4;
 controls.maxDistance = 28;
 controls.target.set(0, 0, 0);
 
-const hemi = new THREE.HemisphereLight(0xb0c4ff, 0x1a1520, 1.05);
+// Balanced lighting so U and D (and all sides) stay readable when orbiting underneath.
+const ambient = new THREE.AmbientLight(0xffffff, 0.42);
+scene.add(ambient);
+const hemi = new THREE.HemisphereLight(0xc8d6ff, 0xffe6a8, 0.85); // warm ground = yellow D readable
 scene.add(hemi);
-const key = new THREE.DirectionalLight(0xffffff, 1.15);
+const key = new THREE.DirectionalLight(0xffffff, 0.95);
 key.position.set(6, 10, 4);
 key.castShadow = true;
 scene.add(key);
-const fill = new THREE.DirectionalLight(0x88aaff, 0.35);
-fill.position.set(-5, 2, -3);
+const fill = new THREE.DirectionalLight(0xa8c0ff, 0.45);
+fill.position.set(-6, 3, -4);
 scene.add(fill);
+// Bounce / under-light: keeps bottom (D) stickers from going black
+const under = new THREE.DirectionalLight(0xfff0c8, 0.7);
+under.position.set(0, -8, 2);
+scene.add(under);
+const rim = new THREE.DirectionalLight(0xb0c8ff, 0.35);
+rim.position.set(2, -2, -6);
+scene.add(rim);
 
 const floor = new THREE.Mesh(
   new THREE.CircleGeometry(12, 64),
-  new THREE.MeshStandardMaterial({ color: 0x0c1224, roughness: 0.9, metalness: 0.2 }),
+  new THREE.MeshStandardMaterial({
+    color: 0x121a30,
+    roughness: 0.92,
+    metalness: 0.15,
+    transparent: true,
+    opacity: 0.72,
+    depthWrite: false,
+  }),
 );
 floor.rotation.x = -Math.PI / 2;
 floor.position.y = -3.2;
 floor.receiveShadow = true;
+floor.renderOrder = -1;
 scene.add(floor);
+// Soft polar limit still allows looking under the cube
+controls.maxPolarAngle = Math.PI; // full orbit including underside
+controls.minPolarAngle = 0;
 
 let cube = new RubiksCube(3);
 scene.add(cube.group);
