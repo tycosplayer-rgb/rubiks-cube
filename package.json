@@ -1,0 +1,21 @@
+{
+  "name": "rubiks-cube",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc && vite build",
+    "preview": "vite preview"
+  },
+  "devDependencies": {
+    "@types/three": "^0.186.0",
+    "typescript": "~6.0.2",
+    "vite": "^8.3.0"
+  },
+  "dependencies": {
+    "cubejs": "^1.3.2",
+    "three": "^0.186.0"
+  },
+  "description": "3D Rubik's Cube web app (2x2\u20137x7) with Three.js"
+}
