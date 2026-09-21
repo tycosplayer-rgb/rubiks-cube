@@ -66,10 +66,24 @@ const scrambleLenEl = document.querySelector<HTMLElement>('#scramble-len')!;
 const scrambleTextEl = document.querySelector<HTMLDivElement>('#scramble-text')!;
 
 // --- Three.js scene ---
-const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true });
-renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+// Mobile / low-power: lower DPR + skip shadows so layer turns stay near device refresh rate.
+const isCoarsePointer =
+  (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) ||
+  (navigator.maxTouchPoints > 0 && Math.min(window.innerWidth, window.innerHeight) < 900);
+const dprCap = isCoarsePointer ? 1.5 : 2;
+const useShadows = !isCoarsePointer;
+
+const renderer = new THREE.WebGLRenderer({
+  antialias: !isCoarsePointer,
+  alpha: true,
+  powerPreference: 'high-performance',
+});
+renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, dprCap));
 renderer.setSize(wrap.clientWidth, wrap.clientHeight);
-renderer.shadowMap.enabled = true;
+renderer.shadowMap.enabled = useShadows;
+if (useShadows) {
+  renderer.shadowMap.type = THREE.BasicShadowMap; // cheaper than PCF on mid GPUs
+}
 wrap.appendChild(renderer.domElement);
 
 const scene = new THREE.Scene();
@@ -92,7 +106,12 @@ const hemi = new THREE.HemisphereLight(0xc8d6ff, 0xffe6a8, 0.85); // warm ground
 scene.add(hemi);
 const key = new THREE.DirectionalLight(0xffffff, 0.95);
 key.position.set(6, 10, 4);
-key.castShadow = true;
+key.castShadow = useShadows;
+if (useShadows) {
+  key.shadow.mapSize.set(1024, 1024);
+  key.shadow.camera.near = 1;
+  key.shadow.camera.far = 40;
+}
 scene.add(key);
 const fill = new THREE.DirectionalLight(0xa8c0ff, 0.45);
 fill.position.set(-6, 3, -4);
@@ -126,6 +145,7 @@ controls.maxPolarAngle = Math.PI; // full orbit including underside
 controls.minPolarAngle = 0;
 
 let cube = new RubiksCube(3);
+cube.setCastShadows(useShadows);
 scene.add(cube.group);
 fitCameraToOrder(3);
 
@@ -198,6 +218,7 @@ orderSel.addEventListener('change', () => {
   interaction.dispose();
   cube.stop();
   cube = new RubiksCube(n);
+  cube.setCastShadows(useShadows);
   scene.add(cube.group);
   bindCubeEvents();
   interaction = setupInteraction(renderer.domElement, camera, cube, controls, prevMode);
@@ -234,15 +255,18 @@ function onResize(): void {
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
   renderer.setSize(w, h);
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, dprCap));
 }
 window.addEventListener('resize', onResize);
 
-function animate(): void {
+// Single rAF loop: advance turn interpolation then draw (same frame = no stepped looks).
+function animate(now: number): void {
   requestAnimationFrame(animate);
+  cube.update(now);
   controls.update();
   renderer.render(scene, camera);
 }
-animate();
+requestAnimationFrame(animate);
 
 // Prefetch 3×3 solver in background
 void ensureSolver().then(() => {

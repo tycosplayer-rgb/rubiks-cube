@@ -37,6 +37,35 @@ export class RubiksCube {
   private listeners: Listener[] = [];
   private animSpeed = 1; // multiplier
   private abortSolve = false;
+  private castShadows = true;
+  /** Layer turn driven by main rAF via update() — not a nested rAF loop. */
+  private turnAnim: {
+    selected: Cubie[];
+    move: LayerMove;
+    record: boolean;
+    targetAngle: number;
+    startMs: number;
+    durationMs: number;
+    resolve: () => void;
+  } | null = null;
+  // Scratch objects reused across reparent/snap (no per-call alloc)
+  private readonly _worldMat = new THREE.Matrix4();
+  private readonly _localMat = new THREE.Matrix4();
+  private readonly _pos = new THREE.Vector3();
+  private readonly _quat = new THREE.Quaternion();
+  private readonly _scl = new THREE.Vector3();
+  private readonly _rotMat = new THREE.Matrix4();
+  private readonly _vx = new THREE.Vector3();
+  private readonly _vy = new THREE.Vector3();
+  private readonly _vz = new THREE.Vector3();
+  private readonly _axes = [
+    new THREE.Vector3(1, 0, 0),
+    new THREE.Vector3(0, 1, 0),
+    new THREE.Vector3(0, 0, 1),
+  ];
+  private _sharedGeo: THREE.BoxGeometry | null = null;
+  private _sharedEdges: THREE.EdgesGeometry | null = null;
+  private _edgeMat: THREE.LineBasicMaterial | null = null;
 
   constructor(order = 3) {
     this.order = order;
@@ -67,6 +96,65 @@ export class RubiksCube {
     this.animSpeed = Math.max(0.25, Math.min(4, mult));
   }
 
+  /** Enable/disable cubie shadows (turn off on mobile for smoother turns). */
+  setCastShadows(enabled: boolean): void {
+    this.castShadows = enabled;
+    for (const c of this.cubies) {
+      c.mesh.castShadow = enabled;
+      c.mesh.receiveShadow = enabled;
+    }
+  }
+
+  /**
+   * Advance the in-flight layer turn. Must be called every frame from the
+   * main requestAnimationFrame render loop so rotation and draw stay in sync.
+   */
+  update(nowMs: number = performance.now()): void {
+    const anim = this.turnAnim;
+    if (!anim) return;
+
+    const t = Math.min(1, (nowMs - anim.startMs) / anim.durationMs);
+    const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    this.setPivotAngle(anim.move.axis, anim.targetAngle * eased);
+
+    if (t < 1) return;
+    this.completeTurn(anim);
+  }
+
+  private setPivotAngle(axis: Axis, angle: number): void {
+    if (axis === 'x') this.pivot.rotation.set(angle, 0, 0);
+    else if (axis === 'y') this.pivot.rotation.set(0, angle, 0);
+    else this.pivot.rotation.set(0, 0, angle);
+  }
+
+  private completeTurn(anim: NonNullable<RubiksCube['turnAnim']>): void {
+    const { selected, move, record, targetAngle, resolve } = anim;
+    this.setPivotAngle(move.axis, targetAngle);
+    this.group.updateMatrixWorld(true);
+
+    for (const c of selected) {
+      this.reparentUniform(c.mesh, this.group);
+      this.snapCubie(c);
+      this.rotateIndices(c, move.axis, move.turns);
+    }
+    this.pivot.rotation.set(0, 0, 0);
+    this.pivot.scale.set(1, 1, 1);
+    this.enforceUniformScales();
+
+    if (record) {
+      this.history.push({ ...move });
+      this.tracker.apply(move, this.order);
+      const notation = moveToNotation(move, this.order);
+      this.emit({ type: 'move', notation, historyLen: this.history.length });
+    }
+
+    this.turnAnim = null;
+    this.animating = false;
+    this.emit({ type: 'busy', busy: false });
+    if (this.isSolved()) this.emit({ type: 'solved' });
+    resolve();
+  }
+
   getHistoryLength(): number {
     return this.history.length;
   }
@@ -91,6 +179,12 @@ export class RubiksCube {
   }
 
   private resetState(): void {
+    if (this.turnAnim) {
+      const r = this.turnAnim.resolve;
+      this.turnAnim = null;
+      this.animating = false;
+      r(); // after animating=false so queued moves do not spin-wait
+    }
     this.history = [];
     this.tracker.reset();
     this.animating = false;
@@ -101,9 +195,12 @@ export class RubiksCube {
     // clear old cubies (may currently be under pivot mid-animation)
     for (const c of this.cubies) {
       c.mesh.removeFromParent();
-      c.mesh.geometry.dispose();
       const mats = c.mesh.material as THREE.Material[];
       mats.forEach((m) => m.dispose());
+      // dispose per-mesh edge lines (shared edge geo/mat kept)
+      for (const child of [...c.mesh.children]) {
+        c.mesh.remove(child);
+      }
     }
     this.cubies = [];
     while (this.pivot.children.length) {
@@ -112,9 +209,23 @@ export class RubiksCube {
     this.pivot.rotation.set(0, 0, 0);
     this.pivot.scale.set(1, 1, 1);
 
+    // Shared geometry across all cubies — avoids per-cubie GPU buffer churn
+    if (!this._sharedGeo) {
+      this._sharedGeo = new THREE.BoxGeometry(CUBIE_SIZE, CUBIE_SIZE, CUBIE_SIZE);
+      this._sharedEdges = new THREE.EdgesGeometry(this._sharedGeo, 20);
+      this._edgeMat = new THREE.LineBasicMaterial({
+        color: 0x0a0a0a,
+        transparent: true,
+        opacity: 0.85,
+      });
+    }
+
     const N = this.order;
     const half = (N - 1) / 2;
     const step = CUBIE_SIZE + GAP;
+    const geo = this._sharedGeo!;
+    const edges = this._sharedEdges!;
+    const edgeMat = this._edgeMat!;
 
     for (let ix = 0; ix < N; ix++) {
       for (let iy = 0; iy < N; iy++) {
@@ -123,23 +234,15 @@ export class RubiksCube {
           if (ix > 0 && ix < N - 1 && iy > 0 && iy < N - 1 && iz > 0 && iz < N - 1) continue;
 
           const materials = this.createMaterials(ix, iy, iz, N);
-          const geo = new THREE.BoxGeometry(CUBIE_SIZE, CUBIE_SIZE, CUBIE_SIZE);
-          // slight bevel feel via edges later
           const mesh = new THREE.Mesh(geo, materials);
-          mesh.castShadow = true;
-          mesh.receiveShadow = true;
+          mesh.castShadow = this.castShadows;
+          mesh.receiveShadow = this.castShadows;
           mesh.position.set((ix - half) * step, (iy - half) * step, (iz - half) * step);
           mesh.userData.cubie = true;
           this.group.add(mesh);
           this.cubies.push({ mesh, ix, iy, iz });
 
-          // dark edge lines
-          const edges = new THREE.EdgesGeometry(geo, 20);
-          const line = new THREE.LineSegments(
-            edges,
-            new THREE.LineBasicMaterial({ color: 0x0a0a0a, transparent: true, opacity: 0.85 }),
-          );
-          mesh.add(line);
+          mesh.add(new THREE.LineSegments(edges, edgeMat));
         }
       }
     }
@@ -197,53 +300,22 @@ export class RubiksCube {
         this.reparentUniform(c.mesh, this.pivot);
       }
 
+      // Longer base duration → more interpolated frames even if device dips below 60fps.
+      // Speed slider still scales via animSpeed (scramble/solve stay snappy when raised).
       const targetAngle = (turns * Math.PI) / 2;
-      const duration = (Math.abs(turns) === 2 ? 220 : 160) / this.animSpeed;
-      const start = performance.now();
+      const durationMs = (Math.abs(turns) === 2 ? 320 : 240) / this.animSpeed;
 
-      const setPivotAngle = (angle: number) => {
-        // Absolute euler — pivot always stays scale (1,1,1); no delta accumulation.
-        if (axis === 'x') this.pivot.rotation.set(angle, 0, 0);
-        else if (axis === 'y') this.pivot.rotation.set(0, angle, 0);
-        else this.pivot.rotation.set(0, 0, angle);
-        this.pivot.scale.set(1, 1, 1);
+      this.turnAnim = {
+        selected,
+        move,
+        record,
+        targetAngle,
+        startMs: performance.now(),
+        durationMs,
+        resolve,
       };
-
-      const tick = (now: number) => {
-        const t = Math.min(1, (now - start) / duration);
-        const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-        setPivotAngle(targetAngle * eased);
-
-        if (t < 1) {
-          requestAnimationFrame(tick);
-        } else {
-          // Exact final angle, then bake world pose into group-local.
-          setPivotAngle(targetAngle);
-          this.group.updateMatrixWorld(true);
-
-          for (const c of selected) {
-            this.reparentUniform(c.mesh, this.group);
-            this.snapCubie(c);
-            this.rotateIndices(c, axis, turns);
-          }
-          this.pivot.rotation.set(0, 0, 0);
-          this.pivot.scale.set(1, 1, 1);
-          this.enforceUniformScales();
-
-          if (record) {
-            this.history.push({ ...move });
-            this.tracker.apply(move, this.order);
-            const notation = moveToNotation(move, this.order);
-            this.emit({ type: 'move', notation, historyLen: this.history.length });
-          }
-
-          this.animating = false;
-          this.emit({ type: 'busy', busy: false });
-          if (this.isSolved()) this.emit({ type: 'solved' });
-          resolve();
-        }
-      };
-      requestAnimationFrame(tick);
+      // First pose immediately so the upcoming render frame is not a blank hold
+      this.setPivotAngle(axis, 0);
     });
   }
 
@@ -256,25 +328,18 @@ export class RubiksCube {
     object.updateWorldMatrix(true, false);
     newParent.updateWorldMatrix(true, false);
 
-    // Capture world pose before the parent change.
-    const worldMatrix = object.matrixWorld.clone();
+    // Capture world pose before the parent change (reuse scratch, no clone alloc).
+    this._worldMat.copy(object.matrixWorld);
     if (object.parent !== newParent) {
       newParent.add(object);
     }
 
     // local = inv(parent.matrixWorld) * object.matrixWorld
-    const local = new THREE.Matrix4()
-      .copy(newParent.matrixWorld)
-      .invert()
-      .multiply(worldMatrix);
+    this._localMat.copy(newParent.matrixWorld).invert().multiply(this._worldMat);
+    this._localMat.decompose(this._pos, this._quat, this._scl);
 
-    const pos = new THREE.Vector3();
-    const quat = new THREE.Quaternion();
-    const scl = new THREE.Vector3();
-    local.decompose(pos, quat, scl);
-
-    object.position.copy(pos);
-    object.quaternion.copy(quat);
+    object.position.copy(this._pos);
+    object.quaternion.copy(this._quat);
     // Critical: discard decomposed scale entirely — keep cubies cube-shaped.
     object.scale.set(1, 1, 1);
     object.updateMatrix();
@@ -306,15 +371,12 @@ export class RubiksCube {
     // Snap orientation by projecting basis vectors onto world axes.
     // NOTE: compare against bestAbs (not Math.abs(-Infinity)===Infinity), else
     // every vector falsely snaps to +X and the basis becomes singular.
-    const axes = [
-      new THREE.Vector3(1, 0, 0),
-      new THREE.Vector3(0, 1, 0),
-      new THREE.Vector3(0, 0, 1),
-    ];
-    const m = new THREE.Matrix4().makeRotationFromQuaternion(c.mesh.quaternion);
-    const x = new THREE.Vector3().setFromMatrixColumn(m, 0);
-    const y = new THREE.Vector3().setFromMatrixColumn(m, 1);
-    const snapVec = (v: THREE.Vector3) => {
+    const axes = this._axes;
+    this._rotMat.makeRotationFromQuaternion(c.mesh.quaternion);
+    this._vx.setFromMatrixColumn(this._rotMat, 0);
+    this._vy.setFromMatrixColumn(this._rotMat, 1);
+
+    const snapInto = (v: THREE.Vector3, out: THREE.Vector3) => {
       let best = axes[0];
       let bestAbs = -1;
       let bestDot = 0;
@@ -327,18 +389,20 @@ export class RubiksCube {
           best = a;
         }
       }
-      return best.clone().multiplyScalar(Math.sign(bestDot) || 1);
+      return out.copy(best).multiplyScalar(Math.sign(bestDot) || 1);
     };
-    const sx = snapVec(x);
-    let sy = snapVec(y);
+
+    const sx = snapInto(this._vx, this._pos); // reuse _pos as sx scratch
+    const sy = snapInto(this._vy, this._scl); // reuse _scl as sy scratch
     // If X/Y snapped to the same axis (near-degenerate), pick an unused axis for Y.
     if (Math.abs(sx.dot(sy)) > 0.5) {
-      sy = axes.find((a) => Math.abs(a.dot(sx)) < 0.5)!.clone();
+      const alt = axes.find((a) => Math.abs(a.dot(sx)) < 0.5)!;
+      sy.copy(alt);
     }
-    const sz = new THREE.Vector3().crossVectors(sx, sy).normalize();
-    sy.crossVectors(sz, sx).normalize();
-    const snapped = new THREE.Matrix4().makeBasis(sx, sy, sz);
-    c.mesh.quaternion.setFromRotationMatrix(snapped);
+    this._vz.crossVectors(sx, sy).normalize();
+    sy.crossVectors(this._vz, sx).normalize();
+    this._rotMat.makeBasis(sx, sy, this._vz);
+    c.mesh.quaternion.setFromRotationMatrix(this._rotMat);
     c.mesh.updateMatrix();
 
     c.ix = Math.round(p.x / step + half);
