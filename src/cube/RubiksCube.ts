@@ -237,16 +237,41 @@ export class RubiksCube {
   private snapCubie(c: Cubie): void {
     const step = CUBIE_SIZE + GAP;
     const half = (this.order - 1) / 2;
-    // snap position from world to grid
     const p = c.mesh.position;
     p.x = Math.round(p.x / step) * step;
     p.y = Math.round(p.y / step) * step;
     p.z = Math.round(p.z / step) * step;
-    // snap rotation to 90°
-    c.mesh.rotation.x = Math.round(c.mesh.rotation.x / (Math.PI / 2)) * (Math.PI / 2);
-    c.mesh.rotation.y = Math.round(c.mesh.rotation.y / (Math.PI / 2)) * (Math.PI / 2);
-    c.mesh.rotation.z = Math.round(c.mesh.rotation.z / (Math.PI / 2)) * (Math.PI / 2);
-    // derive indices from position
+
+    // Snap orientation by projecting basis vectors onto world axes
+    const q = c.mesh.quaternion;
+    const axes = [
+      new THREE.Vector3(1, 0, 0),
+      new THREE.Vector3(0, 1, 0),
+      new THREE.Vector3(0, 0, 1),
+    ];
+    const m = new THREE.Matrix4().makeRotationFromQuaternion(q);
+    const x = new THREE.Vector3().setFromMatrixColumn(m, 0);
+    const y = new THREE.Vector3().setFromMatrixColumn(m, 1);
+    const snapVec = (v: THREE.Vector3) => {
+      let best = axes[0];
+      let bestDot = -Infinity;
+      for (const a of axes) {
+        const d = v.dot(a);
+        if (Math.abs(d) > Math.abs(bestDot)) {
+          bestDot = d;
+          best = a.clone().multiplyScalar(Math.sign(d) || 1);
+        }
+      }
+      return best;
+    };
+    const sx = snapVec(x);
+    const sy = snapVec(y);
+    const sz = new THREE.Vector3().crossVectors(sx, sy).normalize();
+    // re-orthogonalize sy
+    sy.crossVectors(sz, sx).normalize();
+    const snapped = new THREE.Matrix4().makeBasis(sx, sy, sz);
+    c.mesh.quaternion.setFromRotationMatrix(snapped);
+
     c.ix = Math.round(p.x / step + half);
     c.iy = Math.round(p.y / step + half);
     c.iz = Math.round(p.z / step + half);

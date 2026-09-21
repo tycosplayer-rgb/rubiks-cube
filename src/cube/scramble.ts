@@ -30,8 +30,14 @@ export function generateScramble(order: number): { moves: LayerMove[]; text: str
       guard++;
     } while (guard < 30 && axis === lastAxis && (layer === lastLayer || order <= 3));
 
-    // Prefer outer layers a bit for odd cubes (centers)
-    if (order >= 3 && Math.random() < 0.35) {
+    // 3×3: only outer faces (keeps cubejs tracker in sync; no M/E/S)
+    if (order === 3) {
+      layer = Math.random() < 0.5 ? 0 : order - 1;
+      if (axis === lastAxis && layer === lastLayer) {
+        layer = layer === 0 ? order - 1 : 0;
+      }
+    } else if (order > 3 && Math.random() < 0.35) {
+      // Prefer outer layers a bit for bigger cubes
       layer = Math.random() < 0.5 ? 0 : order - 1;
       if (axis === lastAxis && layer === lastLayer) {
         layer = layer === 0 ? order - 1 : 0;

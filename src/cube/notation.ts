@@ -91,13 +91,27 @@ export function parseAlgorithm(algo: string, order: number): LayerMove[] {
 
 export function layerMoveToCubejs(move: LayerMove, order: number): string | null {
   if (order !== 3) return null;
-  if (move.layer !== 0 && move.layer !== 2) return null; // only outer for cubejs tracking
+
+  // Middle slices: M (x mid), E (y mid), S (z mid)
+  if (move.layer === 1) {
+    // Convention matching cubejs: M follows L (cw from L), E follows D, S follows F
+    const slice = move.axis === 'x' ? 'M' : move.axis === 'y' ? 'E' : 'S';
+    // L/D are -faces (cwIsNegative=false); F is +face (cwIsNegative=true)
+    // M like L: turns map directly; E like D: direct; S like F: inverted
+    let cw: number;
+    if (slice === 'S') cw = (4 - move.turns) % 4;
+    else cw = move.turns % 4;
+    if (cw === 0) return null;
+    if (cw === 1) return slice;
+    if (cw === 2) return `${slice}2`;
+    return `${slice}'`;
+  }
+
   const face = (() => {
     if (move.axis === 'y') return move.layer === 2 ? 'U' : 'D';
     if (move.axis === 'x') return move.layer === 2 ? 'R' : 'L';
     return move.layer === 2 ? 'F' : 'B';
   })();
-  // convert turns → clockwise notation
   const cwIsNeg = face === 'U' || face === 'R' || face === 'F';
   let cw: number;
   if (cwIsNeg) cw = (4 - move.turns) % 4;
