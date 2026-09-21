@@ -66,7 +66,8 @@ const scrambleLenEl = document.querySelector<HTMLElement>('#scramble-len')!;
 const scrambleTextEl = document.querySelector<HTMLDivElement>('#scramble-text')!;
 
 // --- Three.js scene ---
-// Mobile / low-power: lower DPR + skip shadows so layer turns stay near device refresh rate.
+// Balance AA vs mobile FPS: always enable MSAA (helps silhouette/sticker edges more
+// than raw DPR), keep a DPR cap, and skip shadows on coarse/touch devices.
 const isCoarsePointer =
   (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) ||
   (navigator.maxTouchPoints > 0 && Math.min(window.innerWidth, window.innerHeight) < 900);
@@ -74,17 +75,20 @@ const dprCap = isCoarsePointer ? 1.5 : 2;
 const useShadows = !isCoarsePointer;
 
 const renderer = new THREE.WebGLRenderer({
-  antialias: !isCoarsePointer,
+  antialias: true, // MSAA — prefer over FXAA/SMAA for cubie outlines
   alpha: true,
   powerPreference: 'high-performance',
 });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, dprCap));
-renderer.setSize(wrap.clientWidth, wrap.clientHeight);
+renderer.setSize(wrap.clientWidth, wrap.clientHeight, false);
 renderer.shadowMap.enabled = useShadows;
 if (useShadows) {
   renderer.shadowMap.type = THREE.BasicShadowMap; // cheaper than PCF on mid GPUs
 }
 wrap.appendChild(renderer.domElement);
+// Keep drawing-buffer size in sync with CSS size (avoid CSS upscale blur/aliasing).
+renderer.domElement.style.width = '100%';
+renderer.domElement.style.height = '100%';
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(42, wrap.clientWidth / wrap.clientHeight, 0.1, 200);
@@ -254,8 +258,8 @@ function onResize(): void {
   const h = wrap.clientHeight;
   camera.aspect = w / h;
   camera.updateProjectionMatrix();
-  renderer.setSize(w, h);
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, dprCap));
+  renderer.setSize(w, h, false);
 }
 window.addEventListener('resize', onResize);
 

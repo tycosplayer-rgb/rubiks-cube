@@ -7,6 +7,9 @@ import { CubejsTracker, reverseHistory, ensureSolver } from './solver';
 
 const CUBIE_SIZE = 1;
 const GAP = 0.06;
+/** Fraction of face reserved as dark plastic border (softens 1px sticker edges). */
+const STICKER_INSET = 0.1;
+const STICKER_CORNER = 0.08;
 
 export type CubeEvent =
   | { type: 'busy'; busy: boolean }
@@ -66,6 +69,7 @@ export class RubiksCube {
   private _sharedGeo: THREE.BoxGeometry | null = null;
   private _sharedEdges: THREE.EdgesGeometry | null = null;
   private _edgeMat: THREE.LineBasicMaterial | null = null;
+  private _stickerBorderMap: THREE.CanvasTexture | null = null;
 
   constructor(order = 3) {
     this.order = order;
@@ -213,11 +217,14 @@ export class RubiksCube {
     if (!this._sharedGeo) {
       this._sharedGeo = new THREE.BoxGeometry(CUBIE_SIZE, CUBIE_SIZE, CUBIE_SIZE);
       this._sharedEdges = new THREE.EdgesGeometry(this._sharedGeo, 20);
+      // Soft silhouette: low-opacity edge lines (MSAA + inset stickers do the heavy lifting)
       this._edgeMat = new THREE.LineBasicMaterial({
-        color: 0x0a0a0a,
+        color: 0x050505,
         transparent: true,
-        opacity: 0.85,
+        opacity: 0.45,
+        depthWrite: false,
       });
+      this._stickerBorderMap = this.createStickerBorderMap();
     }
 
     const N = this.order;
@@ -248,7 +255,40 @@ export class RubiksCube {
     }
   }
 
+  /** Grayscale map: white rounded sticker × material.color, dark rim = plastic border. */
+  private createStickerBorderMap(): THREE.CanvasTexture {
+    const size = 128;
+    const canvas = document.createElement('canvas');
+    canvas.width = size;
+    canvas.height = size;
+    const ctx = canvas.getContext('2d')!;
+    ctx.fillStyle = '#141414';
+    ctx.fillRect(0, 0, size, size);
+    const inset = STICKER_INSET * size;
+    const r = STICKER_CORNER * size;
+    const x = inset;
+    const y = inset;
+    const w = size - inset * 2;
+    const h = size - inset * 2;
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    const rr = Math.min(r, w / 2, h / 2);
+    ctx.moveTo(x + rr, y);
+    ctx.arcTo(x + w, y, x + w, y + h, rr);
+    ctx.arcTo(x + w, y + h, x, y + h, rr);
+    ctx.arcTo(x, y + h, x, y, rr);
+    ctx.arcTo(x, y, x + w, y, rr);
+    ctx.closePath();
+    ctx.fill();
+    const tex = new THREE.CanvasTexture(canvas);
+    tex.colorSpace = THREE.NoColorSpace;
+    tex.anisotropy = 4;
+    tex.needsUpdate = true;
+    return tex;
+  }
+
   private createMaterials(ix: number, iy: number, iz: number, N: number): THREE.MeshStandardMaterial[] {
+    const borderMap = this._stickerBorderMap;
     const plastic = () =>
       new THREE.MeshStandardMaterial({
         color: FACE_COLORS.plastic,
@@ -258,11 +298,13 @@ export class RubiksCube {
     const sticker = (face: FaceId) =>
       new THREE.MeshStandardMaterial({
         color: FACE_COLORS[face],
+        map: borderMap,
         roughness: 0.45,
         metalness: 0.06,
         // Keep face color readable from any orbit angle (esp. underside)
         emissive: FACE_COLORS[face],
         emissiveIntensity: 0.22,
+        emissiveMap: borderMap ?? undefined,
       });
 
     // BoxGeometry: +X -X +Y -Y +Z -Z
