@@ -223,3 +223,51 @@ button.ghost {
     margin-top: 2px;
   }
 }
+
+.mode-toggle {
+  display: inline-flex;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+  background: #0f1528;
+}
+
+.mode-btn {
+  appearance: none;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 10px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: none;
+  transform: none;
+}
+
+.mode-btn + .mode-btn {
+  border-left: 1px solid var(--border);
+}
+
+.mode-btn:hover:not(:disabled) {
+  border-color: transparent;
+  transform: none;
+  color: var(--text);
+  background: rgba(91, 140, 255, 0.12);
+}
+
+.mode-btn.active {
+  color: var(--text);
+  background: linear-gradient(180deg, #3d6ef0, #2a4fbf);
+}
+
+@media (max-width: 640px) {
+  .mode-toggle {
+    width: 100%;
+  }
+  .mode-btn {
+    flex: 1;
+    padding: 10px 8px;
+  }
+}

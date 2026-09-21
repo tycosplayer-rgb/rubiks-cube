@@ -483,58 +483,78 @@ export class RubiksCube {
   }
 
   /**
-   * Determine layer move from drag on a face.
-   * drag: world-space delta projected onto face plane.
+   * Determine layer move from a screen-space drag on a face sticker.
+   *
+   * Model (camera-aware, finger follows sticker):
+   * 1. Snap hit face normal to a world axis → faceAxis.
+   * 2. Two candidate rotation axes = the other two world axes.
+   * 3. For each candidate R, RH +turn moves stickers along cross(R, N).
+   *    Project that world motion into screen space at the hit point;
+   *    score = screenDelta · screenMotion.
+   * 4. Dominant |score| picks R; layer = cubie index along R;
+   *    score>0 → +1 quarter (RH), else +3.
+   *
+   * screenDelta: client pixels (+x right, +y down), matching pointer events.
    */
   dragToMove(
     cubieMesh: THREE.Mesh,
     faceNormal: THREE.Vector3,
-    dragWorld: THREE.Vector3,
+    screenDelta: THREE.Vector2,
+    camera: THREE.Camera,
+    hitPoint: THREE.Vector3,
   ): LayerMove | null {
     const cubie = this.cubies.find((c) => c.mesh === cubieMesh);
     if (!cubie) return null;
+    if (screenDelta.lengthSq() < 1e-8) return null;
 
-    const n = faceNormal.clone().normalize();
-    // dominant face axis
-    const abs = { x: Math.abs(n.x), y: Math.abs(n.y), z: Math.abs(n.z) };
+    const nRaw = faceNormal.clone().normalize();
+    const abs = { x: Math.abs(nRaw.x), y: Math.abs(nRaw.y), z: Math.abs(nRaw.z) };
     let faceAxis: Axis = 'y';
     if (abs.x >= abs.y && abs.x >= abs.z) faceAxis = 'x';
     else if (abs.z >= abs.y && abs.z >= abs.x) faceAxis = 'z';
     else faceAxis = 'y';
 
-    // project drag onto plane
-    const drag = dragWorld.clone().projectOnPlane(n);
-    if (drag.length() < 1e-6) return null;
+    // Snap normal to ±unit axis so mapping stays stable after slight glancing hits
+    const n = new THREE.Vector3(
+      faceAxis === 'x' ? Math.sign(nRaw.x) || 1 : 0,
+      faceAxis === 'y' ? Math.sign(nRaw.y) || 1 : 0,
+      faceAxis === 'z' ? Math.sign(nRaw.z) || 1 : 0,
+    );
 
-    // choose tangential axis with largest drag component
     const candidates: Axis[] = (['x', 'y', 'z'] as Axis[]).filter((a) => a !== faceAxis);
-    let moveAxis: Axis = candidates[0];
-    let best = 0;
-    for (const a of candidates) {
-      const v = new THREE.Vector3(a === 'x' ? 1 : 0, a === 'y' ? 1 : 0, a === 'z' ? 1 : 0);
-      const mag = Math.abs(drag.dot(v));
-      if (mag > best) {
-        best = mag;
-        moveAxis = a;
+    let bestAxis: Axis = candidates[0];
+    let bestScore = 0;
+
+    const origin = hitPoint.clone();
+    const p0 = origin.clone().project(camera);
+
+    for (const axis of candidates) {
+      const axisDir = new THREE.Vector3(
+        axis === 'x' ? 1 : 0,
+        axis === 'y' ? 1 : 0,
+        axis === 'z' ? 1 : 0,
+      );
+      // Sticker motion under positive RH rotation about axisDir
+      const motion = new THREE.Vector3().crossVectors(axisDir, n);
+      if (motion.lengthSq() < 1e-10) continue;
+      motion.normalize();
+
+      const p1 = origin.clone().add(motion).project(camera);
+      // NDC y is up; client y is down → flip y to match pointer dy
+      const sx = p1.x - p0.x;
+      const sy = -(p1.y - p0.y);
+      const score = screenDelta.x * sx + screenDelta.y * sy;
+      if (Math.abs(score) > Math.abs(bestScore)) {
+        bestScore = score;
+        bestAxis = axis;
       }
     }
 
-    // layer = cubie index along moveAxis
-    const layer = moveAxis === 'x' ? cubie.ix : moveAxis === 'y' ? cubie.iy : cubie.iz;
+    if (Math.abs(bestScore) < 1e-12) return null;
 
-    // sense: cross(faceNormal, moveAxisDir) gives positive drag direction for +RH turn
-    const axisDir = new THREE.Vector3(
-      moveAxis === 'x' ? 1 : 0,
-      moveAxis === 'y' ? 1 : 0,
-      moveAxis === 'z' ? 1 : 0,
-    );
-    const positiveDragDir = new THREE.Vector3().crossVectors(n, axisDir).normalize();
-    const sense = Math.sign(drag.dot(positiveDragDir));
-    if (sense === 0) return null;
-
-    // sense > 0 → +1 turn (RH); sense < 0 → +3
-    const turns = (sense > 0 ? 1 : 3) as 1 | 3;
-    return { axis: moveAxis, layer, turns };
+    const layer = bestAxis === 'x' ? cubie.ix : bestAxis === 'y' ? cubie.iy : cubie.iz;
+    const turns = (bestScore > 0 ? 1 : 3) as 1 | 3;
+    return { axis: bestAxis, layer, turns };
   }
 
   getMoveRecords(): MoveRecord[] {

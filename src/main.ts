@@ -2,7 +2,7 @@ import './style.css';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { RubiksCube } from './cube/RubiksCube';
-import { setupInteraction } from './cube/controls';
+import { setupInteraction, type ControlMode, type InteractionHandle } from './cube/controls';
 import { FACE_HEX } from './cube/colors';
 import { ensureSolver } from './cube/solver';
 
@@ -32,6 +32,11 @@ app.innerHTML = `
         <label class="ctrl">速度
           <input id="speed" type="range" min="0.5" max="3" step="0.25" value="1" />
         </label>
+        <div class="mode-toggle" role="group" aria-label="操作模式">
+          <button type="button" class="mode-btn active" data-mode="smart" title="点色块拧层，空白转视角">智能</button>
+          <button type="button" class="mode-btn" data-mode="orbit" title="只旋转视角">视角</button>
+          <button type="button" class="mode-btn" data-mode="twist" title="只拧魔方层">拧动</button>
+        </div>
         <button id="btn-scramble" class="primary" type="button">打乱</button>
         <button id="btn-solve" class="success" type="button">自动还原</button>
         <button id="btn-reset" class="ghost" type="button">复位</button>
@@ -44,7 +49,7 @@ app.innerHTML = `
         <span class="muted">打乱长度 <strong id="scramble-len">—</strong></span>
       </div>
       <div id="scramble-text" class="scramble-box">打乱公式将显示在这里</div>
-      <div class="hint">拖拽色块转动层 · 空白处拖拽/双指旋转视角 · 触控支持</div>
+      <div class="hint">智能：单指点色块拧层、点空白转视角；双指始终转视角 · 可切换「视角/拧动」锁定</div>
     </div>
   </div>
 `;
@@ -103,7 +108,27 @@ let cube = new RubiksCube(3);
 scene.add(cube.group);
 fitCameraToOrder(3);
 
-let disposeInteraction = setupInteraction(renderer.domElement, camera, cube, controls);
+let interaction: InteractionHandle = setupInteraction(renderer.domElement, camera, cube, controls, 'smart');
+
+const modeBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.mode-btn'));
+function applyModeUI(mode: ControlMode): void {
+  for (const btn of modeBtns) {
+    btn.classList.toggle('active', btn.dataset.mode === mode);
+  }
+}
+for (const btn of modeBtns) {
+  btn.addEventListener('click', () => {
+    const mode = btn.dataset.mode as ControlMode;
+    interaction.setMode(mode);
+    applyModeUI(mode);
+    const labels: Record<ControlMode, string> = {
+      smart: '智能模式：点色块拧层，空白转视角',
+      orbit: '视角模式：拖拽只旋转相机',
+      twist: '拧动模式：拖拽只拧层（不转视角）',
+    };
+    statusEl.textContent = labels[mode];
+  });
+}
 
 function setBusy(busy: boolean): void {
   btnScramble.disabled = busy;
@@ -148,12 +173,14 @@ function fitCameraToOrder(n: number): void {
 orderSel.addEventListener('change', () => {
   const n = Number(orderSel.value);
   scene.remove(cube.group);
-  disposeInteraction();
+  const prevMode = interaction.getMode();
+  interaction.dispose();
   cube.stop();
   cube = new RubiksCube(n);
   scene.add(cube.group);
   bindCubeEvents();
-  disposeInteraction = setupInteraction(renderer.domElement, camera, cube, controls);
+  interaction = setupInteraction(renderer.domElement, camera, cube, controls, prevMode);
+  applyModeUI(prevMode);
   fitCameraToOrder(n);
   movesEl.textContent = '0';
   scrambleLenEl.textContent = '—';
