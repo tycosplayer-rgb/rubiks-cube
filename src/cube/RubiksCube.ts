@@ -302,8 +302,10 @@ export class RubiksCube {
 
       // Longer base duration → more interpolated frames even if device dips below 60fps.
       // Speed slider still scales via animSpeed (scramble/solve stay snappy when raised).
-      const targetAngle = (turns * Math.PI) / 2;
-      const durationMs = (Math.abs(turns) === 2 ? 320 : 240) / this.animSpeed;
+      // turns=3 is logically +3π/2 ≡ −π/2; animate the short signed arc (never +270°/long way).
+      const signedQuarters = turns === 3 ? -1 : turns;
+      const targetAngle = (signedQuarters * Math.PI) / 2;
+      const durationMs = (Math.abs(signedQuarters) === 2 ? 320 : 240) / this.animSpeed;
 
       this.turnAnim = {
         selected,
