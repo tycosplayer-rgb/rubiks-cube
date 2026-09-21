@@ -98,17 +98,19 @@ export class RubiksCube {
   }
 
   private build(): void {
-    // clear old cubies
+    // clear old cubies (may currently be under pivot mid-animation)
     for (const c of this.cubies) {
-      this.group.remove(c.mesh);
+      c.mesh.removeFromParent();
       c.mesh.geometry.dispose();
       const mats = c.mesh.material as THREE.Material[];
       mats.forEach((m) => m.dispose());
     }
     this.cubies = [];
     while (this.pivot.children.length) {
-      this.group.attach(this.pivot.children[0]);
+      this.pivot.remove(this.pivot.children[0]);
     }
+    this.pivot.rotation.set(0, 0, 0);
+    this.pivot.scale.set(1, 1, 1);
 
     const N = this.order;
     const half = (N - 1) / 2;
@@ -185,10 +187,11 @@ export class RubiksCube {
         return c.iz === layer;
       });
 
-      // attach to pivot
+      // Parent selected cubies under a uniform-scale pivot for the turn.
       this.pivot.rotation.set(0, 0, 0);
+      this.pivot.scale.set(1, 1, 1);
       for (const c of selected) {
-        this.pivot.attach(c.mesh);
+        this.reparentUniform(c.mesh, this.pivot);
       }
 
       const targetAngle = (turns * Math.PI) / 2;
@@ -209,13 +212,15 @@ export class RubiksCube {
         if (t < 1) {
           requestAnimationFrame(tick);
         } else {
-          // finalize
+          // Bake world pose into group-local, force uniform scale, snap to grid.
+          this.group.updateMatrixWorld(true);
           for (const c of selected) {
-            this.group.attach(c.mesh);
+            this.reparentUniform(c.mesh, this.group);
             this.snapCubie(c);
             this.rotateIndices(c, axis, turns);
           }
           this.pivot.rotation.set(0, 0, 0);
+          this.pivot.scale.set(1, 1, 1);
 
           if (record) {
             this.history.push({ ...move });
@@ -234,6 +239,38 @@ export class RubiksCube {
     });
   }
 
+  /**
+   * Reparent while baking world position/quaternion into local space and
+   * forcing uniform scale (1,1,1). Avoids Object3D.attach matrix decompose,
+   * which can inject non-uniform scale after compound 90° turns.
+   */
+  private reparentUniform(object: THREE.Object3D, newParent: THREE.Object3D): void {
+    object.updateWorldMatrix(true, false);
+    newParent.updateWorldMatrix(true, false);
+
+    const worldPos = new THREE.Vector3();
+    const worldQuat = new THREE.Quaternion();
+    object.getWorldPosition(worldPos);
+    object.getWorldQuaternion(worldQuat);
+
+    newParent.add(object);
+
+    const parentPos = new THREE.Vector3();
+    const parentQuat = new THREE.Quaternion();
+    const parentScale = new THREE.Vector3();
+    newParent.matrixWorld.decompose(parentPos, parentQuat, parentScale);
+
+    const invParentQuat = parentQuat.clone().invert();
+    object.position.copy(worldPos).sub(parentPos).applyQuaternion(invParentQuat);
+    // Parent of cubies must stay uniformly scaled at 1; still divide defensively.
+    if (Math.abs(parentScale.x) > 1e-8) object.position.x /= parentScale.x;
+    if (Math.abs(parentScale.y) > 1e-8) object.position.y /= parentScale.y;
+    if (Math.abs(parentScale.z) > 1e-8) object.position.z /= parentScale.z;
+    object.quaternion.copy(invParentQuat.multiply(worldQuat));
+    object.scale.set(1, 1, 1);
+    object.updateMatrix();
+  }
+
   private snapCubie(c: Cubie): void {
     const step = CUBIE_SIZE + GAP;
     const half = (this.order - 1) / 2;
@@ -242,35 +279,46 @@ export class RubiksCube {
     p.y = Math.round(p.y / step) * step;
     p.z = Math.round(p.z / step) * step;
 
-    // Snap orientation by projecting basis vectors onto world axes
-    const q = c.mesh.quaternion;
+    // Always keep cubie scale uniform — attach/decompose must never leave sticks.
+    c.mesh.scale.set(1, 1, 1);
+
+    // Snap orientation by projecting basis vectors onto world axes.
+    // NOTE: compare against bestAbs (not Math.abs(-Infinity)===Infinity), else
+    // every vector falsely snaps to +X and the basis becomes singular.
     const axes = [
       new THREE.Vector3(1, 0, 0),
       new THREE.Vector3(0, 1, 0),
       new THREE.Vector3(0, 0, 1),
     ];
-    const m = new THREE.Matrix4().makeRotationFromQuaternion(q);
+    const m = new THREE.Matrix4().makeRotationFromQuaternion(c.mesh.quaternion);
     const x = new THREE.Vector3().setFromMatrixColumn(m, 0);
     const y = new THREE.Vector3().setFromMatrixColumn(m, 1);
     const snapVec = (v: THREE.Vector3) => {
       let best = axes[0];
-      let bestDot = -Infinity;
+      let bestAbs = -1;
+      let bestDot = 0;
       for (const a of axes) {
         const d = v.dot(a);
-        if (Math.abs(d) > Math.abs(bestDot)) {
+        const ad = Math.abs(d);
+        if (ad > bestAbs) {
+          bestAbs = ad;
           bestDot = d;
-          best = a.clone().multiplyScalar(Math.sign(d) || 1);
+          best = a;
         }
       }
-      return best;
+      return best.clone().multiplyScalar(Math.sign(bestDot) || 1);
     };
     const sx = snapVec(x);
-    const sy = snapVec(y);
+    let sy = snapVec(y);
+    // If X/Y snapped to the same axis (near-degenerate), pick an unused axis for Y.
+    if (Math.abs(sx.dot(sy)) > 0.5) {
+      sy = axes.find((a) => Math.abs(a.dot(sx)) < 0.5)!.clone();
+    }
     const sz = new THREE.Vector3().crossVectors(sx, sy).normalize();
-    // re-orthogonalize sy
     sy.crossVectors(sz, sx).normalize();
     const snapped = new THREE.Matrix4().makeBasis(sx, sy, sz);
     c.mesh.quaternion.setFromRotationMatrix(snapped);
+    c.mesh.updateMatrix();
 
     c.ix = Math.round(p.x / step + half);
     c.iy = Math.round(p.y / step + half);
