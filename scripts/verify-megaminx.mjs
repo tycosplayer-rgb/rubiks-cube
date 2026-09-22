@@ -235,6 +235,151 @@ m.reset();
 for (const { face, steps } of seq) applyInstant(face, steps);
 const gap = maxFaceGap();
 
+
+
+// --- dragToMove multi-face finger-follows scoring ---
+function makeCamera() {
+  const cam = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
+  cam.position.set(0, 1.2, 9);
+  cam.lookAt(0, 0, 0);
+  cam.updateMatrixWorld(true);
+  cam.updateProjectionMatrix();
+  return cam;
+}
+
+function layerFacesForPiece(pieceId) {
+  m.group.updateMatrixWorld(true);
+  const faces = [];
+  for (const f of m['faces']) {
+    const tiles = m['megaTiles'].filter((t) => t.pieceId === pieceId);
+    if (tiles.some((t) => m['tileWorldCenter'](t).dot(f.axis) > 2.0)) faces.push(f.id);
+  }
+  return faces;
+}
+
+/** Mirror Megaminx.dragToMove scoring to predict the winner. */
+function scoreFaceSteps(point, faceId, steps, delta, cam) {
+  const f = m['faceOf'](faceId);
+  const radial = point.clone().addScaledVector(f.axis, -point.dot(f.axis));
+  const tangent = new THREE.Vector3().crossVectors(f.axis, radial);
+  if (tangent.lengthSq() < 1e-8) return -Infinity;
+  tangent.normalize();
+  const p0 = point.clone().project(cam);
+  const p1 = point.clone().addScaledVector(tangent, steps).project(cam);
+  let sx = p1.x - p0.x;
+  let sy = -(p1.y - p0.y);
+  const slen = Math.hypot(sx, sy);
+  if (slen < 1e-10) return -Infinity;
+  sx /= slen;
+  sy /= slen;
+  return delta.x * sx + delta.y * sy;
+}
+
+function assertDragScoring() {
+  m.reset();
+  const cam = makeCamera();
+  const edges = m['megaTiles'].filter((t) => t.kind === 'edge');
+  let checked = 0;
+  let multiCand = 0;
+  let failures = 0;
+  let normalOverridden = 0;
+
+  for (const tile of edges) {
+    const faces = layerFacesForPiece(tile.pieceId);
+    if (faces.length < 2) continue;
+    multiCand++;
+    const point = m['tileWorldCenter'](tile).clone();
+    const buildFace = m['faces'][tile.faceIndex];
+    const normal = buildFace.axis.clone();
+
+    // Cardinal swipes: result must be a candidate, and match argmax scoring.
+    for (const delta of [
+      new THREE.Vector2(-40, 0),
+      new THREE.Vector2(40, 0),
+      new THREE.Vector2(0, -40),
+      new THREE.Vector2(0, 40),
+    ]) {
+      let expectFace = null;
+      let expectSteps = 1;
+      let expectScore = 0;
+      for (const faceId of faces) {
+        for (const steps of [1, -1]) {
+          const s = scoreFaceSteps(point, faceId, steps, delta, cam);
+          if (s > expectScore) {
+            expectScore = s;
+            expectFace = faceId;
+            expectSteps = steps;
+          }
+        }
+      }
+      const move = m.dragToMove(tile.mesh, normal, delta, cam, point);
+      checked++;
+      if (expectScore < 1e-6) {
+        if (move !== null) {
+          failures++;
+          if (failures <= 5) console.error('expected null for weak swipe', { move, expectScore });
+        }
+        continue;
+      }
+      if (!move || move.kind !== 'face' || move.face !== expectFace || move.steps !== expectSteps) {
+        failures++;
+        if (failures <= 5) {
+          console.error('drag argmax mismatch', {
+            pieceId: tile.pieceId,
+            delta: { x: delta.x, y: delta.y },
+            expect: { face: expectFace, steps: expectSteps, score: expectScore },
+            got: move,
+            candidates: faces,
+            hitNormalFace: buildFace.id,
+          });
+        }
+      } else if (move.face !== buildFace.id && normal.dot(m['faceOf'](move.face).axis) < 0.9) {
+        // Hit normal belonged to build face, but motion picked a sibling layer.
+        normalOverridden++;
+      }
+    }
+  }
+
+  // Explicit override case: hit normal = U, swipe matches a non-U sibling better.
+  let overrideDemo = false;
+  {
+    const uAxis = m['faceOf']('U').axis;
+    const delta = new THREE.Vector2(-50, 0);
+    for (const tile of edges) {
+      const faces = layerFacesForPiece(tile.pieceId);
+      if (!faces.includes('U') || faces.length < 2) continue;
+      const point = m['tileWorldCenter'](tile).clone();
+      let best = { face: null, steps: 1, score: 0 };
+      for (const faceId of faces) {
+        for (const steps of [1, -1]) {
+          const s = scoreFaceSteps(point, faceId, steps, delta, cam);
+          if (s > best.score) best = { face: faceId, steps, score: s };
+        }
+      }
+      if (!best.face || best.face === 'U' || best.score < 1e-6) continue;
+      const move = m.dragToMove(tile.mesh, uAxis.clone(), delta, cam, point);
+      if (move && move.face === best.face && move.steps === best.steps) {
+        overrideDemo = true;
+        break;
+      }
+    }
+  }
+
+  const ok = failures === 0 && checked > 0 && multiCand > 0 && (normalOverridden > 0 || overrideDemo);
+  console.log('dragScoring', {
+    checked,
+    multiCand,
+    failures,
+    normalOverridden,
+    overrideDemo,
+    ok,
+  });
+  return ok;
+}
+
+m.reset();
+const dragScoringOk = assertDragScoring();
+
 const pass =
   v.tiles === 132 &&
   v.perFace === 11 &&
@@ -257,7 +402,8 @@ const pass =
   gap < 0.08 &&
   resolveSolved &&
   resolveAfterMoves &&
-  staleTrapOk;
+  staleTrapOk &&
+  dragScoringOk;
 
 console.log({
   nLayer,
@@ -273,6 +419,7 @@ console.log({
   resolveSolved,
   resolveAfterMoves,
   staleTrapOk,
+  dragScoringOk,
 });
 console.log(pass ? 'PASS' : 'FAIL');
 process.exit(pass ? 0 : 1);

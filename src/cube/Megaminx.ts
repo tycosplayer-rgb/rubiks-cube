@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { PolyPuzzle, type PolyFace, type PolyTile } from './PolyPuzzle';
-import type { FaceTurnMove, VisualStyle } from './puzzle';
+import type { AnyMove, FaceTurnMove, VisualStyle } from './puzzle';
 
 const COLORS = [
   0xf5f5f5, 0xc41e3a, 0x1646c4, 0xffd500, 0x7b2cbf, 0x009e60,
@@ -224,6 +224,88 @@ export class Megaminx extends PolyPuzzle {
       }
     }
     return best;
+  }
+
+  /**
+   * Finger-follows among candidate face layers (like RubiksCube multi-axis scoring).
+   * An edge/corner piece sits in multiple layers; pick the face+direction whose
+   * screen-space sticker motion best matches the swipe — not merely the hit normal.
+   */
+  dragToMove(
+    mesh: THREE.Mesh,
+    normal: THREE.Vector3,
+    delta: THREE.Vector2,
+    camera: THREE.Camera,
+    point: THREE.Vector3,
+  ): AnyMove | null {
+    if (delta.lengthSq() < 1) return null;
+
+    const pieceId = String(mesh.userData.pieceId ?? '');
+    const hitFace = this.resolveHitFace(point, normal);
+    if (!hitFace && !pieceId) return null;
+
+    // Candidates: every face whose current layer includes this piece, plus hit face.
+    // Same membership rule as selectLayer: piece ∈ layer(F) iff some sticker of
+    // that piece currently projects onto F above FACE_LAYER_THRESH.
+    this.group.updateMatrixWorld(true);
+    const candidates: PolyFace[] = [];
+    const seen = new Set<string>();
+    const add = (f: PolyFace | null | undefined) => {
+      if (!f || seen.has(f.id)) return;
+      seen.add(f.id);
+      candidates.push(f);
+    };
+    add(hitFace);
+    if (pieceId) {
+      const pieceTiles = this.megaTiles.filter((t) => t.pieceId === pieceId);
+      for (const f of this.faces) {
+        if (pieceTiles.some((t) => this.tileWorldCenter(t, this.scratch).dot(f.axis) > FACE_LAYER_THRESH)) {
+          add(f);
+        }
+      }
+    }
+    if (!candidates.length) return null;
+
+    const p0 = point.clone().project(camera);
+    const radial = new THREE.Vector3();
+    const tangent = new THREE.Vector3();
+    const p1 = new THREE.Vector3();
+    let bestFace: PolyFace | null = null;
+    let bestSteps = 1;
+    let bestScore = 0;
+
+    for (const f of candidates) {
+      // RH motion for +1 step: axis × radial (point projected off axis).
+      radial.copy(point).addScaledVector(f.axis, -point.dot(f.axis));
+      tangent.crossVectors(f.axis, radial);
+      if (tangent.lengthSq() < 1e-8) {
+        tangent.crossVectors(f.axis, camera.position.clone().sub(point));
+      }
+      if (tangent.lengthSq() < 1e-8) continue;
+      tangent.normalize();
+
+      for (const steps of [1, -1] as const) {
+        p1.copy(point).addScaledVector(tangent, steps).project(camera);
+        let sx = p1.x - p0.x;
+        let sy = -(p1.y - p0.y);
+        const slen = Math.hypot(sx, sy);
+        if (slen < 1e-10) continue;
+        // Normalize screen motion so foreshortened faces don't win on magnitude alone.
+        sx /= slen;
+        sy /= slen;
+        const score = delta.x * sx + delta.y * sy;
+        if (score > bestScore) {
+          bestScore = score;
+          bestFace = f;
+          bestSteps = steps;
+        }
+      }
+    }
+
+    // Require a clearly positive alignment (noise / near-axis hits).
+    if (!bestFace || bestScore < 1e-6) return null;
+    if (mesh.userData) mesh.userData.turnFace = bestFace.id;
+    return { kind: 'face', face: bestFace.id, steps: bestSteps };
   }
 
   /**
