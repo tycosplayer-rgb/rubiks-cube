@@ -1,37 +1,49 @@
 # 在线魔方 · Rubik's Cube
 
-基于 **Vite + TypeScript + Three.js** 的生产级 3D 魔方网页应用，支持 2×2～7×7，打乱 / 手动拧动 / 自动还原 / 触控与轨道相机。
+基于 **Vite + TypeScript + Three.js** 的交互式 3D 魔方网页应用，支持：
+
+- **方块魔方**：2×2–7×7
+- **金字塔（Pyraminx）**
+- **十二面体（Megaminx）**
 
 ## 在线体验
 
 | 入口 | URL | 说明 |
 |------|-----|------|
-| **推荐（非 github.io）** | https://98amcq-ip-34-193-108-177.tunnelmole.net/ | Tunnelmole HTTPS 隧道；当前 box 在线时可用 |
-| **备用隧道** | https://436a2cc49595929b-34-193-125-207.serveousercontent.com/ | Serveo HTTPS |
-| **备用隧道** | https://weak-months-give.loca.lt/ | localtunnel（浏览器可能有确认页） |
-| GitHub Pages | https://tycosplayer-rgb.github.io/rubiks-cube/ | 已同步修复；**在中国大陆可能被拦截 / 无法打开** |
+| **推荐（非 github.io）** | https://98amcq-ip-34-193-108-177.tunnelmole.net/ | Tunnelmole HTTPS；当前 box 在线时可用 |
+| GitHub Pages | https://tycosplayer-rgb.github.io/rubiks-cube/ | 可能在中国大陆打不开 |
 | 仓库 | https://github.com/tycosplayer-rgb/rubiks-cube | 源码 |
 
-> 若 github.io 打不开，请用上方隧道链接。Cloudflare Pages / Netlify / Vercel 需登录授权后可挂长期生产域名（当前环境无这些平台的 API token）。cloudflared quick tunnel 当前被限流（429）。
-
-静态产物分支（供镜像/自建）：`cdn` 分支根目录为 `dist/` 内容。
+静态产物也发布在 `cdn` 分支根目录（不含 `node_modules`）。
 
 ## 功能
 
-- **阶数**：2×2×2 ～ 7×7×7（默认 3×3），切换阶数会复位到复原状态
-- **打乱**：近似公平的随机打乱，并显示打乱公式与步数
-- **自动还原**：
-  - **3×3**：使用 [cubejs](https://github.com/ldez/cubejs)（Kociemba 两阶段算法）
-  - **其他阶数**：沿打乱/操作历史**逆序回放**还原（见下方限制）
-- **手动操作**：在色块上拖拽转动对应层（手指跟随贴纸方向）
-- **触控 / 鼠标**：
-  - **智能**（默认）：单指点色块 → 拧层；单指点空白 → 转视角；双指始终转视角/缩放
-  - **视角**：锁定为只旋转相机
-  - **拧动**：锁定为只拧层（不转视角）
-- **轨道相机**：空白处拖拽旋转；滚轮 / 双指缩放
-- **速度**：可调节动画速度
-- **外观样式**：贴纸（圆角贴纸 + 黑色塑料边）/ 全色（整面纯色无内嵌边框），选择写入 localStorage
-- **标准配色**：白↔黄、红↔橙、蓝↔绿；默认 U白 D黄 F绿 B蓝 R红 L橙
+### 通用
+- 打乱 / 自动还原 / 复位
+- 轨道相机；智能 / 视角 / 拧动三种手势模式
+- 贴纸 / 全色外观（localStorage 记住）
+- 动画速度调节；状态与步数显示
+
+### 方块魔方
+- 阶数 2–7；色块拖动转层
+- 3×3 使用 cubejs / Kociemba；其它阶数逆序回放历史
+- 保留短路径逆时针动画、安全重挂载、统一 rAF、MSAA、底部补光等优化
+
+### 金字塔 / 十二面体
+- 固定尺寸；切换类型时隐藏阶数选择器
+- **面转按钮**（顺时针 ↻ / 逆时针 ↺）为主要可靠操作方式，适配手机
+- 金字塔另有尖角（tip）按钮
+- 也可拖动色块尝试面转；轨道相机始终可用
+- 打乱 = 随机合法面转；自动还原 = **逆序回放自复位/切换/打乱以来的历史**
+
+## 模型说明与限制（请注意）
+
+金字塔与十二面体是 **3D 面片层模型（facelet-based）**，不是完整隐藏块 / cubie 置换数据库：
+
+- 转动时会选中并旋转对应轴附近的可见色块，画面会真实变化
+- 逆序历史可精确转回记录起点
+- **不是**任意打乱状态的通用求解器；也未模拟所有实体块拓扑细节
+- 手机上请优先使用底部/面板中的面转按钮
 
 ## 本地运行
 
@@ -40,34 +52,17 @@ npm install
 npm run dev
 ```
 
-构建静态站点：
+构建：
 
 ```bash
 npm run build
-# 产物在 dist/，可用 npm run preview 预览
+npm run preview
 ```
 
-`vite.config.ts` 使用相对路径 `base: './'`，可部署到任意根路径或子路径（含 GitHub Pages `/rubiks-cube/`）。
-
-内置 Vite 插件将 `cubejs` 的 `this.Cube` 改写为 `globalThis.Cube`，避免浏览器 ESM 下白屏（仅暗色背景、无 HUD/魔方）。
-
-## 求解器限制
-
-| 阶数 | 求解方式 | 说明 |
-|------|----------|------|
-| 3×3 | Kociemba / cubejs | 根据当前状态求解，支持打乱后继续手动拧再还原 |
-| 2×2、4×4～7×7 | 历史逆序 | 将自上次「复位/切换阶数」以来的所有层转逆序播放；**不是**通用最优解 |
-
-首次加载 3×3 求解器时会在后台初始化（约 1–2 秒），之后求解通常很快。
+`vite.config.ts` 使用相对路径 `base: './'`，可部署到任意子路径。内置 Vite 插件修补 cubejs 的浏览器 ESM 全局引用。
 
 ## 技术栈
 
-- Vite 8 + TypeScript
-- Three.js（WebGL 渲染、OrbitControls）
-- cubejs（仅 3×3）
-
-## 操作提示
-
-- 桌面：贴纸上拖动 → 转层；空白处拖动 → 转视角；可用顶栏「智能 / 视角 / 拧动」锁定
-- 手机：单指点色块拧层、点空白转视角；双指旋转/缩放；不要用单指在色块上想转视角（会拧层）
-- 高层数（4×4+）：点到中间块再拖，即可拧中间层
+- Vite + TypeScript
+- Three.js / OrbitControls
+- cubejs（仅方块 3×3）

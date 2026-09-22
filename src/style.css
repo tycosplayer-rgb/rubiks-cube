@@ -302,3 +302,66 @@ button.ghost {
     padding: 10px 8px;
   }
 }
+
+.hidden { display: none !important; }
+
+.type-ctrl {
+  color: #eef2ff !important;
+  font-weight: 700;
+  padding: 3px 6px;
+  border-radius: 10px;
+  background: rgba(91, 140, 255, .14);
+  border: 1px solid rgba(91, 140, 255, .4);
+}
+
+.type-ctrl select {
+  font-weight: 700;
+  min-width: 106px;
+  border-color: rgba(91, 140, 255, .65);
+}
+
+.face-controls {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  max-height: 108px;
+  overflow: auto;
+  padding-bottom: 2px;
+  scrollbar-width: thin;
+}
+
+.face-turn-pair {
+  display: inline-grid;
+  grid-template-columns: auto 30px 30px;
+  align-items: center;
+  gap: 2px;
+  padding: 2px 3px 2px 7px;
+  border-radius: 9px;
+  border: 1px solid color-mix(in srgb, var(--face-color) 62%, #fff 10%);
+  background: color-mix(in srgb, var(--face-color) 20%, #0f1528);
+}
+
+.face-turn-pair b {
+  min-width: 23px;
+  color: var(--face-color);
+  text-shadow: 0 1px 2px #000, 0 0 1px #000;
+  font: 700 .74rem ui-monospace, monospace;
+  text-align: center;
+}
+
+.face-turn-pair button {
+  padding: 4px;
+  min-width: 28px;
+  min-height: 28px;
+  border-radius: 6px;
+  font-size: 1rem;
+  line-height: 1;
+}
+
+@media (max-width: 640px) {
+  .top-bar { max-height: 48vh; overflow: auto; }
+  .bottom-bar { padding: 9px 10px; }
+  .face-controls { max-height: 96px; gap: 5px; }
+  .face-turn-pair { grid-template-columns: auto 32px 32px; }
+  .face-turn-pair button { min-height: 32px; }
+}

@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import type { RubiksCube } from './RubiksCube';
+import type { Puzzle } from './puzzle';
 
 /** 智能：点到色块拧层、空白转视角；视角：只旋转；拧动：只拧层 */
 export type ControlMode = 'smart' | 'orbit' | 'twist';
@@ -24,7 +24,7 @@ export interface InteractionHandle {
 export function setupInteraction(
   dom: HTMLElement,
   camera: THREE.PerspectiveCamera,
-  cube: RubiksCube,
+  cube: Puzzle,
   controls: OrbitControls,
   initialMode: ControlMode = 'smart',
 ): InteractionHandle {
@@ -35,7 +35,7 @@ export function setupInteraction(
   let gesture: 'none' | 'orbit' | 'turn' | 'pending' = 'none';
   let startX = 0;
   let startY = 0;
-  let startHit: ReturnType<RubiksCube['pickCubie']> = null;
+  let startHit: ReturnType<Puzzle['pickCubie']> = null;
   let startPoint = new THREE.Vector3();
   /** Raised so tiny finger jitter does not commit a turn */
   const THRESH = 28;
@@ -75,7 +75,7 @@ export function setupInteraction(
     setOrbitAllowed(true);
   }
 
-  function beginTurnPending(hit: NonNullable<ReturnType<RubiksCube['pickCubie']>>, x: number, y: number): void {
+  function beginTurnPending(hit: NonNullable<ReturnType<Puzzle['pickCubie']>>, x: number, y: number): void {
     gesture = 'pending';
     startHit = hit;
     startPoint.copy(hit.point);

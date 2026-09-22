@@ -1,10 +1,13 @@
 import './style.css';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { RubiksCube, type VisualStyle } from './cube/RubiksCube';
+import { RubiksCube } from './cube/RubiksCube';
+import { Pyraminx } from './cube/Pyraminx';
+import { Megaminx } from './cube/Megaminx';
 import { setupInteraction, type ControlMode, type InteractionHandle } from './cube/controls';
 import { FACE_HEX } from './cube/colors';
 import { ensureSolver } from './cube/solver';
+import type { Puzzle, PuzzleType, VisualStyle } from './cube/puzzle';
 
 const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
@@ -13,33 +16,35 @@ app.innerHTML = `
     <div class="top-bar panel">
       <div class="title">
         在线魔方
-        <span>标准配色 · 2×2–7×7</span>
+        <span id="subtitle">标准配色 · 2×2–7×7</span>
         <span class="swatches" title="U白 D黄 F绿 B蓝 R红 L橙" aria-hidden="true">
-          <i style="background:${FACE_HEX.U}"></i>
-          <i style="background:${FACE_HEX.D}"></i>
-          <i style="background:${FACE_HEX.F}"></i>
-          <i style="background:${FACE_HEX.B}"></i>
-          <i style="background:${FACE_HEX.R}"></i>
-          <i style="background:${FACE_HEX.L}"></i>
+          <i style="background:${FACE_HEX.U}"></i><i style="background:${FACE_HEX.D}"></i>
+          <i style="background:${FACE_HEX.F}"></i><i style="background:${FACE_HEX.B}"></i>
+          <i style="background:${FACE_HEX.R}"></i><i style="background:${FACE_HEX.L}"></i>
         </span>
       </div>
       <div class="controls">
-        <label class="ctrl">阶数
+        <label class="ctrl type-ctrl">魔方类型
+          <select id="puzzle-type">
+            <option value="cube">方块魔方</option>
+            <option value="pyraminx">金字塔</option>
+            <option value="megaminx">十二面体</option>
+          </select>
+        </label>
+        <label class="ctrl" id="order-ctrl">阶数
           <select id="order">
             ${[2, 3, 4, 5, 6, 7].map((n) => `<option value="${n}" ${n === 3 ? 'selected' : ''}>${n}×${n}×${n}</option>`).join('')}
           </select>
         </label>
-        <label class="ctrl">速度
-          <input id="speed" type="range" min="0.5" max="3" step="0.25" value="1" />
-        </label>
+        <label class="ctrl">速度 <input id="speed" type="range" min="0.5" max="3" step="0.25" value="1" /></label>
         <div class="mode-toggle" role="group" aria-label="操作模式">
           <button type="button" class="mode-btn active" data-mode="smart" title="点色块拧层，空白转视角">智能</button>
           <button type="button" class="mode-btn" data-mode="orbit" title="只旋转视角">视角</button>
           <button type="button" class="mode-btn" data-mode="twist" title="只拧魔方层">拧动</button>
         </div>
         <div class="mode-toggle style-toggle" role="group" aria-label="外观样式">
-          <button type="button" class="style-btn active" data-style="sticker" title="圆角贴纸 + 黑色塑料边框">贴纸</button>
-          <button type="button" class="style-btn" data-style="full" title="整面纯色，无贴纸内嵌边框">全色</button>
+          <button type="button" class="style-btn active" data-style="sticker">贴纸</button>
+          <button type="button" class="style-btn" data-style="full">全色</button>
         </div>
         <button id="btn-scramble" class="primary" type="button">打乱</button>
         <button id="btn-solve" class="success" type="button">自动还原</button>
@@ -47,18 +52,21 @@ app.innerHTML = `
       </div>
     </div>
     <div class="bottom-bar panel">
+      <div id="face-controls" class="face-controls hidden" aria-label="面转按钮"></div>
       <div class="status-row">
         <span id="status">就绪</span>
         <span class="muted">步数 <strong id="moves">0</strong></span>
         <span class="muted">打乱长度 <strong id="scramble-len">—</strong></span>
       </div>
       <div id="scramble-text" class="scramble-box">打乱公式将显示在这里</div>
-      <div class="hint">智能：单指点色块拧层、点空白转视角；双指始终转视角 · 可切换「视角/拧动」锁定</div>
+      <div id="hint" class="hint">智能：单指点色块拧层、点空白转视角；双指始终转视角 · 可切换「视角/拧动」锁定</div>
     </div>
   </div>
 `;
 
 const wrap = document.querySelector<HTMLDivElement>('#canvas-wrap')!;
+const typeSel = document.querySelector<HTMLSelectElement>('#puzzle-type')!;
+const orderCtrl = document.querySelector<HTMLElement>('#order-ctrl')!;
 const orderSel = document.querySelector<HTMLSelectElement>('#order')!;
 const speedInp = document.querySelector<HTMLInputElement>('#speed')!;
 const btnScramble = document.querySelector<HTMLButtonElement>('#btn-scramble')!;
@@ -68,254 +76,178 @@ const statusEl = document.querySelector<HTMLSpanElement>('#status')!;
 const movesEl = document.querySelector<HTMLElement>('#moves')!;
 const scrambleLenEl = document.querySelector<HTMLElement>('#scramble-len')!;
 const scrambleTextEl = document.querySelector<HTMLDivElement>('#scramble-text')!;
+const faceControls = document.querySelector<HTMLDivElement>('#face-controls')!;
+const subtitleEl = document.querySelector<HTMLElement>('#subtitle')!;
+const hintEl = document.querySelector<HTMLElement>('#hint')!;
 
-// --- Three.js scene ---
-// Balance AA vs mobile FPS: always enable MSAA (helps silhouette/sticker edges more
-// than raw DPR), keep a DPR cap, and skip shadows on coarse/touch devices.
 const isCoarsePointer =
   (typeof window.matchMedia === 'function' && window.matchMedia('(pointer: coarse)').matches) ||
   (navigator.maxTouchPoints > 0 && Math.min(window.innerWidth, window.innerHeight) < 900);
 const dprCap = isCoarsePointer ? 1.5 : 2;
 const useShadows = !isCoarsePointer;
-
-const renderer = new THREE.WebGLRenderer({
-  antialias: true, // MSAA — prefer over FXAA/SMAA for cubie outlines
-  alpha: true,
-  powerPreference: 'high-performance',
-});
+const renderer = new THREE.WebGLRenderer({ antialias: true, alpha: true, powerPreference: 'high-performance' });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, dprCap));
 renderer.setSize(wrap.clientWidth, wrap.clientHeight, false);
 renderer.shadowMap.enabled = useShadows;
-if (useShadows) {
-  renderer.shadowMap.type = THREE.BasicShadowMap; // cheaper than PCF on mid GPUs
-}
+if (useShadows) renderer.shadowMap.type = THREE.BasicShadowMap;
 wrap.appendChild(renderer.domElement);
-// Keep drawing-buffer size in sync with CSS size (avoid CSS upscale blur/aliasing).
 renderer.domElement.style.width = '100%';
 renderer.domElement.style.height = '100%';
 
 const scene = new THREE.Scene();
 const camera = new THREE.PerspectiveCamera(42, wrap.clientWidth / wrap.clientHeight, 0.1, 200);
-camera.position.set(5.2, 4.2, 6.2);
-
 const controls = new OrbitControls(camera, renderer.domElement);
 controls.enableDamping = true;
 controls.dampingFactor = 0.08;
 controls.rotateSpeed = 0.9;
 controls.enablePan = false;
-controls.minDistance = 4;
-controls.maxDistance = 28;
 controls.target.set(0, 0, 0);
-
-// Balanced lighting so U and D (and all sides) stay readable when orbiting underneath.
-const ambient = new THREE.AmbientLight(0xffffff, 0.42);
-scene.add(ambient);
-const hemi = new THREE.HemisphereLight(0xc8d6ff, 0xffe6a8, 0.85); // warm ground = yellow D readable
-scene.add(hemi);
+controls.maxPolarAngle = Math.PI;
+controls.minPolarAngle = 0;
+scene.add(new THREE.AmbientLight(0xffffff, 0.42));
+scene.add(new THREE.HemisphereLight(0xc8d6ff, 0xffe6a8, 0.85));
 const key = new THREE.DirectionalLight(0xffffff, 0.95);
 key.position.set(6, 10, 4);
 key.castShadow = useShadows;
-if (useShadows) {
-  key.shadow.mapSize.set(1024, 1024);
-  key.shadow.camera.near = 1;
-  key.shadow.camera.far = 40;
-}
+if (useShadows) { key.shadow.mapSize.set(1024, 1024); key.shadow.camera.near = 1; key.shadow.camera.far = 40; }
 scene.add(key);
-const fill = new THREE.DirectionalLight(0xa8c0ff, 0.45);
-fill.position.set(-6, 3, -4);
-scene.add(fill);
-// Bounce / under-light: keeps bottom (D) stickers from going black
-const under = new THREE.DirectionalLight(0xfff0c8, 0.7);
-under.position.set(0, -8, 2);
-scene.add(under);
-const rim = new THREE.DirectionalLight(0xb0c8ff, 0.35);
-rim.position.set(2, -2, -6);
-scene.add(rim);
-
+const fill = new THREE.DirectionalLight(0xa8c0ff, 0.45); fill.position.set(-6, 3, -4); scene.add(fill);
+const under = new THREE.DirectionalLight(0xfff0c8, 0.7); under.position.set(0, -8, 2); scene.add(under);
+const rim = new THREE.DirectionalLight(0xb0c8ff, 0.35); rim.position.set(2, -2, -6); scene.add(rim);
 const floor = new THREE.Mesh(
   new THREE.CircleGeometry(12, 64),
-  new THREE.MeshStandardMaterial({
-    color: 0x121a30,
-    roughness: 0.92,
-    metalness: 0.15,
-    transparent: true,
-    opacity: 0.72,
-    depthWrite: false,
-  }),
+  new THREE.MeshStandardMaterial({ color: 0x121a30, roughness: .92, metalness: .15, transparent: true, opacity: .72, depthWrite: false }),
 );
 floor.rotation.x = -Math.PI / 2;
-floor.position.y = -3.2;
 floor.receiveShadow = true;
 floor.renderOrder = -1;
 scene.add(floor);
-// Soft polar limit still allows looking under the cube
-controls.maxPolarAngle = Math.PI; // full orbit including underside
-controls.minPolarAngle = 0;
 
 const STYLE_STORAGE_KEY = 'rubiks-visual-style';
 function loadVisualStyle(): VisualStyle {
-  try {
-    const v = localStorage.getItem(STYLE_STORAGE_KEY);
-    if (v === 'sticker' || v === 'full') return v;
-  } catch {
-    /* private mode / blocked storage */
-  }
+  try { const v = localStorage.getItem(STYLE_STORAGE_KEY); if (v === 'sticker' || v === 'full') return v; } catch { /* ignore */ }
   return 'sticker';
 }
-function saveVisualStyle(style: VisualStyle): void {
-  try {
-    localStorage.setItem(STYLE_STORAGE_KEY, style);
-  } catch {
-    /* ignore */
-  }
-}
-
+function saveVisualStyle(style: VisualStyle): void { try { localStorage.setItem(STYLE_STORAGE_KEY, style); } catch { /* ignore */ } }
 let visualStyle = loadVisualStyle();
-let cube = new RubiksCube(3, visualStyle);
-cube.setCastShadows(useShadows);
-scene.add(cube.group);
-fitCameraToOrder(3);
-
-let interaction: InteractionHandle = setupInteraction(renderer.domElement, camera, cube, controls, 'smart');
+let currentType: PuzzleType = 'cube';
+let currentOrder = 3;
+function createPuzzle(type: PuzzleType): Puzzle {
+  if (type === 'pyraminx') return new Pyraminx(visualStyle);
+  if (type === 'megaminx') return new Megaminx(visualStyle);
+  return new RubiksCube(currentOrder, visualStyle);
+}
+let puzzle: Puzzle = createPuzzle(currentType);
+puzzle.setCastShadows(useShadows);
+scene.add(puzzle.group);
+let interaction: InteractionHandle = setupInteraction(renderer.domElement, camera, puzzle, controls, 'smart');
+let unbindPuzzle = () => {};
 
 const modeBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.mode-btn'));
 const styleBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.style-btn'));
-function applyStyleUI(style: VisualStyle): void {
-  for (const btn of styleBtns) {
-    btn.classList.toggle('active', btn.dataset.style === style);
-  }
-}
+function applyStyleUI(style: VisualStyle): void { for (const b of styleBtns) b.classList.toggle('active', b.dataset.style === style); }
+function applyModeUI(mode: ControlMode): void { for (const b of modeBtns) b.classList.toggle('active', b.dataset.mode === mode); }
 applyStyleUI(visualStyle);
-for (const btn of styleBtns) {
-  btn.addEventListener('click', () => {
-    const style = btn.dataset.style as VisualStyle;
-    if (style !== 'sticker' && style !== 'full') return;
-    visualStyle = style;
-    cube.setVisualStyle(style);
-    saveVisualStyle(style);
-    applyStyleUI(style);
-    statusEl.textContent = style === 'sticker' ? '外观：贴纸（圆角贴纸 + 黑边）' : '外观：全色（整面纯色）';
-  });
-}
-function applyModeUI(mode: ControlMode): void {
-  for (const btn of modeBtns) {
-    btn.classList.toggle('active', btn.dataset.mode === mode);
-  }
-}
-for (const btn of modeBtns) {
-  btn.addEventListener('click', () => {
-    const mode = btn.dataset.mode as ControlMode;
-    interaction.setMode(mode);
-    applyModeUI(mode);
-    const labels: Record<ControlMode, string> = {
-      smart: '智能模式：点色块拧层，空白转视角',
-      orbit: '视角模式：拖拽只旋转相机',
-      twist: '拧动模式：拖拽只拧层（不转视角）',
-    };
-    statusEl.textContent = labels[mode];
-  });
-}
 
 function setBusy(busy: boolean): void {
-  btnScramble.disabled = busy;
-  btnSolve.disabled = busy;
-  btnReset.disabled = busy;
-  orderSel.disabled = busy;
+  btnScramble.disabled = busy; btnSolve.disabled = busy; btnReset.disabled = busy; typeSel.disabled = busy;
+  orderSel.disabled = busy || currentType !== 'cube';
+  faceControls.querySelectorAll('button').forEach((b) => { (b as HTMLButtonElement).disabled = busy; });
 }
-
-function bindCubeEvents(): void {
-  cube.on((e) => {
+function resetHud(): void {
+  movesEl.textContent = '0'; scrambleLenEl.textContent = '—'; scrambleTextEl.textContent = '打乱公式将显示在这里';
+}
+function bindPuzzleEvents(): void {
+  unbindPuzzle();
+  unbindPuzzle = puzzle.on((e) => {
     if (e.type === 'busy') setBusy(e.busy);
     if (e.type === 'move') movesEl.textContent = String(e.historyLen);
-    if (e.type === 'scramble') {
-      scrambleTextEl.textContent = e.text;
-      scrambleLenEl.textContent = String(e.length);
-    }
+    if (e.type === 'scramble') { scrambleTextEl.textContent = e.text; scrambleLenEl.textContent = String(e.length); }
     if (e.type === 'status') statusEl.textContent = e.message;
-    if (e.type === 'solved') {
-      statusEl.textContent = '已复原 ✨';
-      movesEl.textContent = '0';
-    }
-    if (e.type === 'order') {
-      statusEl.textContent = `阶数已切换为 ${e.order}×${e.order}×${e.order}`;
-      movesEl.textContent = '0';
-      scrambleLenEl.textContent = '—';
-      scrambleTextEl.textContent = '打乱公式将显示在这里';
-    }
+    if (e.type === 'solved') { statusEl.textContent = '已复原 ✨'; movesEl.textContent = '0'; }
   });
 }
-bindCubeEvents();
-
-function fitCameraToOrder(n: number): void {
-  const dist = 4.2 + n * 0.85;
-  camera.position.set(dist * 0.85, dist * 0.7, dist);
-  controls.minDistance = 2.5 + n * 0.35;
-  controls.maxDistance = 18 + n * 2;
+function fitCamera(): void {
+  const dist = puzzle.getFitDistance();
+  camera.position.set(dist * .85, dist * .7, dist);
+  controls.minDistance = dist * .48;
+  controls.maxDistance = dist * 3.5;
+  floor.position.y = puzzle.getFloorY();
   controls.update();
-  // raise floor
-  floor.position.y = -((n * 1.06) / 2 + 0.8);
 }
-
-orderSel.addEventListener('change', () => {
-  const n = Number(orderSel.value);
-  scene.remove(cube.group);
+function renderFaceControls(): void {
+  const buttons = puzzle.getFaceButtons();
+  faceControls.classList.toggle('hidden', buttons.length === 0);
+  faceControls.innerHTML = buttons.map((b) => `
+    <span class="face-turn-pair" style="--face-color:${b.color}">
+      <b>${b.label}</b>
+      <button type="button" data-face="${b.id}" data-tip="${b.tip ? '1' : '0'}" data-dir="1" aria-label="${b.label} 顺时针">↻</button>
+      <button type="button" data-face="${b.id}" data-tip="${b.tip ? '1' : '0'}" data-dir="-1" aria-label="${b.label} 逆时针">↺</button>
+    </span>`).join('');
+  faceControls.querySelectorAll<HTMLButtonElement>('button').forEach((button) => button.addEventListener('click', () => {
+    const face = button.dataset.face!;
+    const steps = Number(button.dataset.dir);
+    const tip = button.dataset.tip === '1';
+    void puzzle.applyMove({ kind: 'face', face, steps, tip }, true);
+  }));
+}
+function updateTypeUI(): void {
+  const isCube = currentType === 'cube';
+  orderCtrl.classList.toggle('hidden', !isCube);
+  orderSel.disabled = !isCube;
+  subtitleEl.textContent = isCube ? '标准配色 · 2×2–7×7' : currentType === 'pyraminx' ? '金字塔 · 四轴 120° 面转' : '十二面体 · 十二面 72° 面转';
+  hintEl.textContent = isCube
+    ? '智能：单指点色块拧层、点空白转视角；双指始终转视角 · 可切换「视角/拧动」锁定'
+    : '使用上方面转按钮可靠操作（↻/↺）；也可拖动色块尝试面转，空白处拖动旋转视角 · 双指缩放';
+  renderFaceControls();
+}
+function switchPuzzle(type: PuzzleType): void {
   const prevMode = interaction.getMode();
   interaction.dispose();
-  cube.stop();
-  cube = new RubiksCube(n, visualStyle);
-  cube.setCastShadows(useShadows);
-  scene.add(cube.group);
-  bindCubeEvents();
-  interaction = setupInteraction(renderer.domElement, camera, cube, controls, prevMode);
+  unbindPuzzle();
+  scene.remove(puzzle.group);
+  puzzle.stop();
+  puzzle.dispose();
+  currentType = type;
+  puzzle = createPuzzle(type);
+  puzzle.setSpeed(Number(speedInp.value));
+  puzzle.setCastShadows(useShadows);
+  scene.add(puzzle.group);
+  bindPuzzleEvents();
+  interaction = setupInteraction(renderer.domElement, camera, puzzle, controls, prevMode);
   applyModeUI(prevMode);
-  fitCameraToOrder(n);
-  movesEl.textContent = '0';
-  scrambleLenEl.textContent = '—';
-  scrambleTextEl.textContent = '打乱公式将显示在这里';
-  statusEl.textContent = `阶数 ${n}×${n}×${n}（已复位）`;
-});
+  fitCamera();
+  resetHud();
+  updateTypeUI();
+  statusEl.textContent = type === 'cube' ? `方块魔方 ${currentOrder}×${currentOrder}×${currentOrder}（已复位）` : type === 'pyraminx' ? '金字塔已就绪' : '十二面体已就绪';
+}
 
-speedInp.addEventListener('input', () => {
-  cube.setSpeed(Number(speedInp.value));
+for (const btn of styleBtns) btn.addEventListener('click', () => {
+  const style = btn.dataset.style as VisualStyle;
+  if (style !== 'sticker' && style !== 'full') return;
+  visualStyle = style; puzzle.setVisualStyle(style); saveVisualStyle(style); applyStyleUI(style);
+  statusEl.textContent = style === 'sticker' ? '外观：贴纸' : '外观：全色';
 });
-
-btnScramble.addEventListener('click', () => {
-  void cube.scramble();
+for (const btn of modeBtns) btn.addEventListener('click', () => {
+  const mode = btn.dataset.mode as ControlMode; interaction.setMode(mode); applyModeUI(mode);
+  statusEl.textContent = mode === 'smart' ? '智能模式：色块拧动，空白转视角' : mode === 'orbit' ? '视角模式：拖拽只旋转相机' : '拧动模式：拖拽只拧层';
 });
+typeSel.addEventListener('change', () => switchPuzzle(typeSel.value as PuzzleType));
+orderSel.addEventListener('change', () => { currentOrder = Number(orderSel.value); switchPuzzle('cube'); });
+speedInp.addEventListener('input', () => puzzle.setSpeed(Number(speedInp.value)));
+btnScramble.addEventListener('click', () => { void puzzle.scramble(); });
+btnSolve.addEventListener('click', () => { void puzzle.solve(); });
+btnReset.addEventListener('click', () => { puzzle.reset(); resetHud(); });
 
-btnSolve.addEventListener('click', () => {
-  void cube.solve();
-});
-
-btnReset.addEventListener('click', () => {
-  cube.reset();
-  movesEl.textContent = '0';
-  scrambleLenEl.textContent = '—';
-  scrambleTextEl.textContent = '打乱公式将显示在这里';
-});
-
+bindPuzzleEvents();
+fitCamera();
+updateTypeUI();
 function onResize(): void {
-  const w = wrap.clientWidth;
-  const h = wrap.clientHeight;
-  camera.aspect = w / h;
-  camera.updateProjectionMatrix();
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, dprCap));
-  renderer.setSize(w, h, false);
+  const w = wrap.clientWidth, h = wrap.clientHeight;
+  camera.aspect = w / h; camera.updateProjectionMatrix();
+  renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, dprCap)); renderer.setSize(w, h, false);
 }
 window.addEventListener('resize', onResize);
-
-// Single rAF loop: advance turn interpolation then draw (same frame = no stepped looks).
-function animate(now: number): void {
-  requestAnimationFrame(animate);
-  cube.update(now);
-  controls.update();
-  renderer.render(scene, camera);
-}
+function animate(now: number): void { requestAnimationFrame(animate); puzzle.update(now); controls.update(); renderer.render(scene, camera); }
 requestAnimationFrame(animate);
-
-// Prefetch 3×3 solver in background
-void ensureSolver().then(() => {
-  if (statusEl.textContent === '就绪') {
-    statusEl.textContent = '就绪 · 3×3 求解器已加载';
-  }
-});
+void ensureSolver().then(() => { if (currentType === 'cube' && statusEl.textContent === '就绪') statusEl.textContent = '就绪 · 3×3 求解器已加载'; });

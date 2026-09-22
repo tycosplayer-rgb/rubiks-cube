@@ -1,6 +1,8 @@
 import * as THREE from 'three';
 import { FACE_COLORS, type FaceId } from './colors';
 import type { Axis, LayerMove, MoveRecord } from './types';
+import type { AnyMove, FaceButton, Puzzle, PuzzleEvent, VisualStyle } from './puzzle';
+import { isFaceTurnMove } from './puzzle';
 import { moveToNotation } from './notation';
 import { generateScramble } from './scramble';
 import { CubejsTracker, reverseHistory, ensureSolver } from './solver';
@@ -12,15 +14,9 @@ const STICKER_INSET = 0.1;
 const STICKER_CORNER = 0.08;
 
 /** Sticker = inset rounded stickers + black rim; full = seamless solid face color. */
-export type VisualStyle = 'sticker' | 'full';
+export type { VisualStyle } from './puzzle';
 
-export type CubeEvent =
-  | { type: 'busy'; busy: boolean }
-  | { type: 'move'; notation: string; historyLen: number }
-  | { type: 'scramble'; text: string; length: number }
-  | { type: 'solved' }
-  | { type: 'order'; order: number }
-  | { type: 'status'; message: string };
+export type CubeEvent = PuzzleEvent;
 
 type Listener = (e: CubeEvent) => void;
 
@@ -31,7 +27,8 @@ interface Cubie {
   iz: number;
 }
 
-export class RubiksCube {
+export class RubiksCube implements Puzzle {
+  readonly puzzleType = 'cube' as const;
   readonly group = new THREE.Group();
   private cubies: Cubie[] = [];
   private order: number;
@@ -380,7 +377,8 @@ export class RubiksCube {
   }
 
   /** Apply a single layer move (waits if busy) */
-  async applyMove(move: LayerMove, record = true): Promise<void> {
+  async applyMove(move: AnyMove, record = true): Promise<void> {
+    if (isFaceTurnMove(move)) return;
     return this.playMoveDirect(move, record);
   }
 
@@ -637,6 +635,37 @@ export class RubiksCube {
 
   stop(): void {
     this.abortSolve = true;
+  }
+
+  getFitDistance(): number {
+    return 4.2 + this.order * 0.85;
+  }
+
+  getFloorY(): number {
+    return -((this.order * 1.06) / 2 + 0.8);
+  }
+
+  getFaceButtons(): FaceButton[] {
+    return [];
+  }
+
+  dispose(): void {
+    this.stop();
+    for (const c of this.cubies) {
+      c.mesh.removeFromParent();
+      (c.mesh.material as THREE.Material[]).forEach((m) => m.dispose());
+    }
+    this.cubies = [];
+    this._sharedGeo?.dispose();
+    this._sharedEdges?.dispose();
+    this._edgeMat?.dispose();
+    this._stickerBorderMap?.dispose();
+    this._sharedGeo = null;
+    this._sharedEdges = null;
+    this._edgeMat = null;
+    this._stickerBorderMap = null;
+    this.group.clear();
+    this.listeners = [];
   }
 
   /** Find cubie mesh under ray */
