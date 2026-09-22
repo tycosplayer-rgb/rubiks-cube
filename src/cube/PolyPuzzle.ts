@@ -116,7 +116,7 @@ export abstract class PolyPuzzle implements Puzzle {
   /** Pull core inward while a layer spins so shear gaps do not flash black. */
   protected setCoreTurnSafe(animating: boolean): void {
     if (!this.core) return;
-    this.core.scale.setScalar(animating ? 0.93 : 1);
+    this.core.scale.setScalar(animating ? 0.90 : 1);
   }
 
   setVisualStyle(style: VisualStyle): void {

@@ -15,6 +15,12 @@ const IDS = ['U', 'L', 'R', 'B'];
  */
 const TIP_THRESH = 1.5;
 const DEEP_THRESH = 0.4;
+/** Geometry inset for grooves between facelets. */
+const STICKER_SHRINK = 0.99;
+/** Push facelets outward along face normals so spinning layers clear the core. */
+const FACELET_OUTSET = 0.065;
+/** Core circumradius — recessed so mid-turn shear gaps do not flash black. */
+const CORE_RADIUS = 2.15;
 
 interface PyraTile extends PolyTile {
   /** Tip index this facelet belongs to as a trivial tip sticker, or -1. */
@@ -52,15 +58,20 @@ export class Pyraminx extends PolyPuzzle {
       colorCss: CSS[i],
     }));
 
+    // Recessed soft-gray core: mid-turn shear gaps show plastic, not black clip.
     this.core = new THREE.Mesh(
-      new THREE.TetrahedronGeometry(2.55, 0),
+      new THREE.TetrahedronGeometry(CORE_RADIUS, 0),
       new THREE.MeshStandardMaterial({
-        color: 0x3a3f4a,
-        roughness: 0.78,
-        metalness: 0.02,
+        color: 0x8b929c,
+        roughness: 0.85,
+        metalness: 0.0,
         flatShading: true,
+        polygonOffset: true,
+        polygonOffsetFactor: 2,
+        polygonOffsetUnits: 2,
       }),
     );
+    this.core.renderOrder = -1;
     this.group.add(this.core);
 
     for (let faceIndex = 0; faceIndex < 4; faceIndex++) {
@@ -76,7 +87,7 @@ export class Pyraminx extends PolyPuzzle {
         [tb, tc] = [tc, tb];
         normal.negate();
       }
-      const off = normal.clone().multiplyScalar(0.045);
+      const off = normal.clone().multiplyScalar(FACELET_OUTSET);
       const n = 3;
       const p = (i: number, j: number) =>
         a
@@ -87,9 +98,10 @@ export class Pyraminx extends PolyPuzzle {
 
       const addTri = (v0: THREE.Vector3, v1: THREE.Vector3, v2: THREE.Vector3, tipPiece: number) => {
         const centroid = v0.clone().add(v1).add(v2).multiplyScalar(1 / 3);
-        const shrink = (v: THREE.Vector3) => centroid.clone().lerp(v, 0.97);
+        const shrink = (v: THREE.Vector3) => centroid.clone().lerp(v, STICKER_SHRINK);
         const geo = new THREE.BufferGeometry().setFromPoints([shrink(v0), shrink(v1), shrink(v2)]);
         geo.setIndex([0, 1, 2]);
+        geo.computeVertexNormals();
 
         // Drag / gesture: nearest tip axis (tip-centric, not face-normal).
         let nearest = 0;
@@ -109,6 +121,11 @@ export class Pyraminx extends PolyPuzzle {
         tile.faceIndex = faceIndex;
         tile.mesh.userData.tipPiece = tipPiece;
         tile.mesh.userData.faceIndex = faceIndex;
+        // Pull stickers in front of the core; avoids z-fight / black flash.
+        tile.mesh.material.polygonOffset = true;
+        tile.mesh.material.polygonOffsetFactor = -4;
+        tile.mesh.material.polygonOffsetUnits = -4;
+        tile.mesh.renderOrder = 1;
         this.pyraTiles.push(tile);
       };
 
