@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "verify:pyraminx": "tsx scripts/verify-pyraminx.mjs"
+    "verify:pyraminx": "tsx scripts/verify-pyraminx.mjs",
+    "verify:megaminx": "tsx scripts/verify-megaminx.mjs"
   },
   "devDependencies": {
     "@types/three": "^0.186.0",
@@ -18,5 +19,5 @@
     "cubejs": "^1.3.2",
     "three": "^0.186.0"
   },
-  "description": "3D Rubik's Cube web app (2x2\u20137x7) with Three.js"
+  "description": "3D Rubik's Cube web app (2x2–7x7) with Three.js"
 }

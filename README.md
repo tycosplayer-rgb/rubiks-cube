@@ -10,7 +10,7 @@
 
 | 入口 | URL | 说明 |
 |------|-----|------|
-| **推荐（非 github.io）** | https://cknttk-ip-100-63-197-102.tunnelmole.net/ | Tunnelmole HTTPS；当前 box 在线时可用 |
+| **推荐（非 github.io）** | https://98amcq-ip-34-193-108-177.tunnelmole.net/ | Tunnelmole HTTPS；当前 box 在线时可用 |
 | GitHub Pages | https://tycosplayer-rgb.github.io/rubiks-cube/ | 可能在中国大陆打不开 |
 | 仓库 | https://github.com/tycosplayer-rgb/rubiks-cube | 源码 |
 
@@ -71,8 +71,14 @@ npm run preview
 - 四**尖轴** 120° 转动（非面转）：`U层`/`L层`/`R层`/`B层` 为深层（尖+邻边/轴心带，12 贴纸），`U尖`… 为只转尖（3 贴纸）
 - 打乱以深层尖轴为主，偶发尖拧；还原为历史逆序
 
+### 十二面体（Megaminx）
+- 每面 **五角星切割（star cut）**：1 中心五边形 + 5 角块 + 5 棱块（共 11 贴纸），沟槽呈五角星
+- 面转 72°；按 piece id 选层（本面 11 贴纸 + 邻面同层棱/角贴纸，约 26），避免脆弱的 top-N
+- 打乱 / 还原为随机面转与历史逆序
+
 ### 校验
 ```bash
 npx tsx scripts/verify-pyraminx.mjs
+npx tsx scripts/verify-megaminx.mjs
 ```
 

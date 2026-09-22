@@ -199,7 +199,7 @@ function updateTypeUI(): void {
     ? '标准配色 · 2×2–7×7'
     : currentType === 'pyraminx'
       ? '金字塔 · 四尖轴 120°'
-      : '十二面体 · 十二面 72° 面转';
+      : '十二面体 · 五角星切割 · 72° 面转';
   hintEl.textContent = isCube
     ? '智能：单指点色块拧层、点空白转视角；双指始终转视角 · 可切换「视角/拧动」锁定'
     : currentType === 'pyraminx'

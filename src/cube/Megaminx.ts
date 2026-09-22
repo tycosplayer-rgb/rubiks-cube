@@ -9,15 +9,44 @@ const COLORS = [
 const CSS = COLORS.map((c) => `#${c.toString(16).padStart(6, '0')}`);
 const IDS = ['U', 'R', 'FR', 'DR', 'D', 'DL', 'L', 'FL', 'BR', 'B', 'BL', 'DB'];
 
+/** Center pentagon radius as fraction of outer vertex distance from face center. */
+const INNER_SCALE = 0.40;
+/** Corner tip depth along each outer edge (fraction of edge length from the vertex). */
+const CORNER_EDGE_T = 0.32;
+const STICKER_SHRINK = 0.97;
+const KEY_DECIMALS = 4;
+
 interface FoundFace {
   normal: THREE.Vector3;
   points: THREE.Vector3[];
 }
 
-/** Dodecahedron facelet Megaminx: 12 faces × (center + 5 petals), 72° turns. */
+interface MegaTile extends PolyTile {
+  pieceId: string;
+  kind: 'center' | 'edge' | 'corner';
+  faceIndex: number;
+}
+
+function vertKey(p: THREE.Vector3): string {
+  return `${p.x.toFixed(KEY_DECIMALS)},${p.y.toFixed(KEY_DECIMALS)},${p.z.toFixed(KEY_DECIMALS)}`;
+}
+
+function edgeKey(a: THREE.Vector3, b: THREE.Vector3): string {
+  const ka = vertKey(a);
+  const kb = vertKey(b);
+  return ka < kb ? `${ka}|${kb}` : `${kb}|${ka}`;
+}
+
+/**
+ * Dodecahedron Megaminx with classic star-cut faces:
+ * each face = 1 center + 5 corners + 5 edges (11 stickers). Grooves read as 五角星.
+ * Face turns are 72°; layer selection is piece-id based (C5-closed).
+ */
 export class Megaminx extends PolyPuzzle {
   readonly puzzleType = 'megaminx' as const;
-  private readonly scratch = new THREE.Vector3();
+  private readonly megaTiles: MegaTile[] = [];
+  /** pieceIds that rotate with each face (center + 5 edges + 5 corners). */
+  private readonly facePieces = new Map<string, Set<string>>();
 
   constructor(style: VisualStyle = 'sticker') {
     super(style);
@@ -59,7 +88,6 @@ export class Megaminx extends PolyPuzzle {
       colorCss: CSS[i],
     }));
 
-    // Muted plastic core so sticker gaps read as grooves, not broken black tiles.
     this.core = new THREE.Mesh(
       new THREE.DodecahedronGeometry(2.58, 0),
       new THREE.MeshStandardMaterial({
@@ -72,46 +100,85 @@ export class Megaminx extends PolyPuzzle {
     this.group.add(this.core);
 
     found.forEach((f, faceIndex) => {
+      const faceId = IDS[faceIndex];
+      const layer = new Set<string>();
+      this.facePieces.set(faceId, layer);
+
       const center = f.points
         .reduce((sum, p) => sum.add(p), new THREE.Vector3())
         .multiplyScalar(1 / f.points.length);
       const normal = f.normal.clone().normalize();
       const u = f.points[0].clone().sub(center).normalize();
       const v = new THREE.Vector3().crossVectors(normal, u).normalize();
-      const points = [...f.points]
-        .sort((a, b) => {
-          const aa = Math.atan2(a.clone().sub(center).dot(v), a.clone().sub(center).dot(u));
-          const bb = Math.atan2(b.clone().sub(center).dot(v), b.clone().sub(center).dot(u));
-          return aa - bb;
-        })
-        .map((p) => p.clone().addScaledVector(normal, 0.045));
-      const c = center.clone().addScaledVector(normal, 0.045);
-      const inner = points.map((p) => c.clone().lerp(p, 0.42));
 
-      const addPoly = (poly: THREE.Vector3[]) => {
+      // Canonical outer vertices (pre-offset) for stable piece keys across faces.
+      const raw = [...f.points].sort((a, b) => {
+        const aa = Math.atan2(a.clone().sub(center).dot(v), a.clone().sub(center).dot(u));
+        const bb = Math.atan2(b.clone().sub(center).dot(v), b.clone().sub(center).dot(u));
+        return aa - bb;
+      });
+
+      const points = raw.map((p) => p.clone().addScaledVector(normal, 0.045));
+      const c = center.clone().addScaledVector(normal, 0.045);
+      const inner = points.map((p) => c.clone().lerp(p, INNER_SCALE));
+
+      const addPoly = (
+        poly: THREE.Vector3[],
+        pieceId: string,
+        kind: MegaTile['kind'],
+      ) => {
         const mid = poly.reduce((sum, p) => sum.add(p), new THREE.Vector3()).multiplyScalar(1 / poly.length);
-        const inset = poly.map((p) => mid.clone().lerp(p, 0.97));
+        const inset = poly.map((p) => mid.clone().lerp(p, STICKER_SHRINK));
         const verts: THREE.Vector3[] = [];
         for (let k = 1; k < inset.length - 1; k++) verts.push(inset[0], inset[k], inset[k + 1]);
         const geo = new THREE.BufferGeometry().setFromPoints(verts);
-        this.addTile(geo, COLORS[faceIndex], IDS[faceIndex]);
+        this.addTile(geo, COLORS[faceIndex], faceId);
+        const tile = this.tiles[this.tiles.length - 1] as MegaTile;
+        tile.pieceId = pieceId;
+        tile.kind = kind;
+        tile.faceIndex = faceIndex;
+        tile.mesh.userData.pieceId = pieceId;
+        tile.mesh.userData.kind = kind;
+        tile.mesh.userData.faceIndex = faceIndex;
+        this.megaTiles.push(tile);
+        layer.add(pieceId);
       };
 
-      addPoly(inner);
+      // 1 center (same orientation as outer face).
+      const centerId = `center:${faceId}`;
+      addPoly(inner, centerId, 'center');
+
       for (let i = 0; i < 5; i++) {
-        addPoly([inner[i], inner[(i + 1) % 5], points[(i + 1) % 5], points[i]]);
+        const i1 = (i + 1) % 5;
+        const i0 = (i + 4) % 5;
+        const Vi = points[i];
+        const Vprev = points[i0];
+        const Vnext = points[i1];
+
+        // Cut points along outer edges, measured from the corner vertex.
+        const cutPrev = Vi.clone().lerp(Vprev, CORNER_EDGE_T);
+        const cutNext = Vi.clone().lerp(Vnext, CORNER_EDGE_T);
+        // Shared cut on edge i→i1 from the far vertex side for the edge quad.
+        const cutNearI = Vi.clone().lerp(points[i1], CORNER_EDGE_T);
+        const cutNearI1 = points[i1].clone().lerp(Vi, CORNER_EDGE_T);
+
+        const cornerId = `corner:${vertKey(raw[i])}`;
+        // Kite tip at outer vertex → reads as star point.
+        addPoly([Vi, cutNext, inner[i], cutPrev], cornerId, 'corner');
+
+        const eId = `edge:${edgeKey(raw[i], raw[i1])}`;
+        // Quad along outer edge between the two corner cuts, against inner edge.
+        addPoly([cutNearI, cutNearI1, inner[i1], inner[i]], eId, 'edge');
       }
     });
   }
 
   protected selectLayer(move: FaceTurnMove): PolyTile[] {
     this.group.updateMatrixWorld(true);
-    const axis = this.faceOf(move.face).axis;
-    return this.tiles
-      .map((tile) => ({ tile, d: this.tileWorldCenter(tile, this.scratch).dot(axis) }))
-      .sort((a, b) => b.d - a.d)
-      .slice(0, 11)
-      .map((x) => x.tile);
+    const pieces = this.facePieces.get(move.face);
+    if (!pieces) return [];
+    // All stickers on pieces that belong to this face's layer (face + neighboring ring).
+    return this.megaTiles.filter((t) => pieces.has(t.pieceId));
   }
 
   protected turnAngle(move: FaceTurnMove): number {
@@ -128,5 +195,48 @@ export class Megaminx extends PolyPuzzle {
 
   getFloorY(): number {
     return -3.05;
+  }
+
+  /** Test helper: counts and C5 closure (no animation). */
+  debugVerifyLayers(): {
+    tiles: number;
+    perFace: number;
+    layerCount: number;
+    centers: number;
+    edges: number;
+    corners: number;
+    layerClosed: boolean;
+    fiveTurnClosed: boolean;
+  } {
+    this.group.updateMatrixWorld(true);
+    const faceId = this.faces[0].id;
+    const axis = this.faces[0].axis;
+    const selected = this.selectLayer({ kind: 'face', face: faceId, steps: 1 });
+    const slots = this.tiles.map((t) => this.tileWorldCenter(t).clone());
+    const q = new THREE.Quaternion().setFromAxisAngle(axis, (Math.PI * 2) / 5);
+    const layerClosed = selected.every((t) => {
+      const dest = this.tileWorldCenter(t).applyQuaternion(q);
+      return slots.some((s) => s.distanceTo(dest) < 0.12);
+    });
+    let fiveTurnClosed = true;
+    for (const t of selected) {
+      const c = this.tileWorldCenter(t).clone();
+      for (let i = 0; i < 5; i++) c.applyQuaternion(q);
+      if (c.distanceTo(this.tileWorldCenter(t)) > 0.12) fiveTurnClosed = false;
+    }
+    const kinds = { center: 0, edge: 0, corner: 0 };
+    for (const t of this.megaTiles) kinds[t.kind]++;
+    // Stickers on the turned face itself should be 11.
+    const onFace = this.megaTiles.filter((t) => t.mesh.userData.turnFace === faceId).length;
+    return {
+      tiles: this.tiles.length,
+      perFace: onFace,
+      layerCount: selected.length,
+      centers: kinds.center,
+      edges: kinds.edge,
+      corners: kinds.corner,
+      layerClosed,
+      fiveTurnClosed,
+    };
   }
 }
