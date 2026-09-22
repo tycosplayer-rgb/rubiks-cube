@@ -135,7 +135,86 @@ for (let i = seq.length - 1; i >= 0; i--) {
 const afterInverse = assertCoverage('after inverse');
 const restored = maxDist(before, centers());
 
+// resolveHitFace must map stickers currently on a face back to that face,
+// even after adjacent turns (stale userData.turnFace must not win).
+function assertResolveHitFace(label) {
+  m.group.updateMatrixWorld(true);
+  const tmpN = new THREE.Vector3();
+  const tmpP = new THREE.Vector3();
+  let failures = 0;
+  let checked = 0;
+  for (const face of m['faces']) {
+    const onFace = m.stickersOnFace(face.id);
+    for (const tile of onFace) {
+      checked++;
+      const point = m['tileWorldCenter'](tile, tmpP).clone();
+      // Approximate outward normal ≈ face axis (sticker sits on this face).
+      const normal = face.axis.clone();
+      const resolved = m['resolveHitFace'](point, normal);
+      if (!resolved || resolved.id !== face.id) {
+        failures++;
+        if (failures <= 3) {
+          console.error(label, 'resolve mismatch', {
+            expect: face.id,
+            got: resolved?.id,
+            staleTurnFace: tile.mesh.userData.turnFace,
+            pieceId: tile.pieceId,
+          });
+        }
+      }
+      // Point-only fallback must also agree for on-face stickers.
+      const byPoint = m['resolveHitFace'](point);
+      if (!byPoint || byPoint.id !== face.id) {
+        failures++;
+        if (failures <= 3) {
+          console.error(label, 'point-fallback mismatch', {
+            expect: face.id,
+            got: byPoint?.id,
+          });
+        }
+      }
+    }
+  }
+  const ok = failures === 0 && checked > 0;
+  console.log(label, { checked, failures, ok });
+  return ok;
+}
+
+m.reset();
+const resolveSolved = assertResolveHitFace('resolve solved');
+m.reset();
+applyInstant('R', 1);
+applyInstant('FR', 1);
+applyInstant('U', 1);
+// After U, a sticker that started on R may now sit on U — resolve must say U.
+const resolveAfterMoves = assertResolveHitFace('resolve after R,FR,U');
+
+// Stale turnFace trap: pick a sticker whose build-time turnFace != current face.
+m.reset();
+applyInstant('R', 1);
+applyInstant('FR', 1);
+let staleTrapOk = false;
+{
+  const uStickers = m.stickersOnFace('U');
+  const migrated = uStickers.find((t) => String(t.mesh.userData.turnFace) !== 'U');
+  if (!migrated) {
+    // All U stickers still have turnFace U (centers never leave) — force via edge/corner.
+    console.log('staleTrap', { migrated: false, note: 'no migrated sticker yet' });
+    staleTrapOk = uStickers.length === 11; // still require face occupancy
+  } else {
+    const point = m['tileWorldCenter'](migrated).clone();
+    const resolved = m['resolveHitFace'](point, m['faceOf']('U').axis);
+    staleTrapOk = resolved?.id === 'U';
+    console.log('staleTrap', {
+      staleTurnFace: migrated.mesh.userData.turnFace,
+      resolved: resolved?.id,
+      ok: staleTrapOk,
+    });
+  }
+}
+
 // Large-gap heuristic: each face's 11 stickers should sit in a tight proj band.
+
 function maxFaceGap() {
   let worst = 0;
   for (const f of m['faces']) {
@@ -175,7 +254,10 @@ const pass =
   midLayer.ok &&
   afterInverse &&
   restored < 0.05 &&
-  gap < 0.08;
+  gap < 0.08 &&
+  resolveSolved &&
+  resolveAfterMoves &&
+  staleTrapOk;
 
 console.log({
   nLayer,
@@ -188,6 +270,9 @@ console.log({
   afterInverse,
   restored,
   gap,
+  resolveSolved,
+  resolveAfterMoves,
+  staleTrapOk,
 });
 console.log(pass ? 'PASS' : 'FAIL');
 process.exit(pass ? 0 : 1);

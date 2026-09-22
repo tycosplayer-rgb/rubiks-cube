@@ -287,31 +287,58 @@ export abstract class PolyPuzzle implements Puzzle {
     this.emit({ type: 'status', message: '已复位' });
   }
 
+  /**
+   * Resolve which face/tip the pointer is on *right now*.
+   * Default: max hitPoint · face.axis (works for tip-axis puzzles like Pyraminx).
+   * Megaminx overrides to prefer face.axis · hitWorldNormal.
+   * Do not trust stale mesh.userData.turnFace after scramble/turns.
+   */
+  protected resolveHitFace(point: THREE.Vector3, _normal?: THREE.Vector3): PolyFace | null {
+    if (!this.faces.length) return null;
+    let best = this.faces[0];
+    let bestDot = -Infinity;
+    for (const f of this.faces) {
+      const d = point.dot(f.axis);
+      if (d > bestDot) {
+        bestDot = d;
+        best = f;
+      }
+    }
+    return best;
+  }
+
   pickCubie(raycaster: THREE.Raycaster): PuzzlePick | null {
     const hit = raycaster.intersectObjects(
       this.tiles.map((t) => t.mesh),
       false,
     )[0];
     if (!hit?.face) return null;
+    const point = hit.point.clone();
+    const faceNormal = hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize();
+    const face = this.resolveHitFace(point, faceNormal);
+    // Keep userData in sync for any code still reading turnFace.
+    if (face) (hit.object as THREE.Mesh).userData.turnFace = face.id;
     return {
       mesh: hit.object as THREE.Mesh,
-      point: hit.point.clone(),
-      faceNormal: hit.face.normal.clone().transformDirection(hit.object.matrixWorld).normalize(),
-      faceId: String(hit.object.userData.turnFace ?? ''),
+      point,
+      faceNormal,
+      faceId: face?.id ?? '',
     };
   }
 
   dragToMove(
     mesh: THREE.Mesh,
-    _normal: THREE.Vector3,
+    normal: THREE.Vector3,
     delta: THREE.Vector2,
     camera: THREE.Camera,
     point: THREE.Vector3,
   ): AnyMove | null {
     if (delta.lengthSq() < 1) return null;
-    const faceId = String(mesh.userData.turnFace ?? '');
-    const f = this.faces.find((x) => x.id === faceId);
+    const f = this.resolveHitFace(point, normal);
     if (!f) return null;
+    if (mesh.userData) mesh.userData.turnFace = f.id;
+    // Camera-aware finger-follows: project RH tangent (axis × radial) into screen;
+    // swipe aligned with that motion → +1 step (RH about outward / tip axis).
     const p0 = point.clone().project(camera);
     const radial = point.clone().sub(f.axis.clone().multiplyScalar(point.dot(f.axis)));
     const tangent = new THREE.Vector3().crossVectors(f.axis, radial);

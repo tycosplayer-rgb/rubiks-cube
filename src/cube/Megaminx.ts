@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PolyPuzzle, type PolyTile } from './PolyPuzzle';
+import { PolyPuzzle, type PolyFace, type PolyTile } from './PolyPuzzle';
 import type { FaceTurnMove, VisualStyle } from './puzzle';
 
 const COLORS = [
@@ -193,6 +193,37 @@ export class Megaminx extends PolyPuzzle {
         addPoly([cutNearI, cutNearI1, inner[i1], inner[i]], eId, 'edge');
       }
     });
+  }
+
+  /**
+   * Current face under the finger: prefer outward normal alignment, then
+   * hit-point projection. Never use build-time userData.turnFace after moves.
+   */
+  protected resolveHitFace(point: THREE.Vector3, normal?: THREE.Vector3): PolyFace | null {
+    if (!this.faces.length) return null;
+    if (normal && normal.lengthSq() > 1e-12) {
+      const n = normal.clone().normalize();
+      let best = this.faces[0];
+      let bestDot = -Infinity;
+      for (const f of this.faces) {
+        const d = f.axis.dot(n);
+        if (d > bestDot) {
+          bestDot = d;
+          best = f;
+        }
+      }
+      return best;
+    }
+    let best = this.faces[0];
+    let bestDot = -Infinity;
+    for (const f of this.faces) {
+      const d = point.dot(f.axis);
+      if (d > bestDot) {
+        bestDot = d;
+        best = f;
+      }
+    }
+    return best;
   }
 
   /**
