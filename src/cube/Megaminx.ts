@@ -59,12 +59,13 @@ export class Megaminx extends PolyPuzzle {
       colorCss: CSS[i],
     }));
 
+    // Muted plastic core so sticker gaps read as grooves, not broken black tiles.
     this.core = new THREE.Mesh(
-      new THREE.DodecahedronGeometry(2.67, 0),
+      new THREE.DodecahedronGeometry(2.58, 0),
       new THREE.MeshStandardMaterial({
-        color: 0x101116,
-        roughness: 0.65,
-        metalness: 0.04,
+        color: 0x3a3f4a,
+        roughness: 0.78,
+        metalness: 0.02,
         flatShading: true,
       }),
     );
@@ -89,7 +90,7 @@ export class Megaminx extends PolyPuzzle {
 
       const addPoly = (poly: THREE.Vector3[]) => {
         const mid = poly.reduce((sum, p) => sum.add(p), new THREE.Vector3()).multiplyScalar(1 / poly.length);
-        const inset = poly.map((p) => mid.clone().lerp(p, 0.93));
+        const inset = poly.map((p) => mid.clone().lerp(p, 0.97));
         const verts: THREE.Vector3[] = [];
         for (let k = 1; k < inset.length - 1; k++) verts.push(inset[0], inset[k], inset[k + 1]);
         const geo = new THREE.BufferGeometry().setFromPoints(verts);

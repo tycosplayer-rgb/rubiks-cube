@@ -124,7 +124,7 @@ export abstract class PolyPuzzle implements Puzzle {
       mesh.material.metalness = this.style === 'sticker' ? 0.03 : 0.08;
       mesh.material.emissive.copy(mesh.material.color);
       mesh.material.emissiveIntensity = 0.18;
-      mesh.scale.setScalar(this.style === 'sticker' ? 1 : 1.03);
+      mesh.scale.setScalar(this.styleScale());
       mesh.material.needsUpdate = true;
     }
   }
@@ -177,6 +177,10 @@ export abstract class PolyPuzzle implements Puzzle {
     });
   }
 
+  protected styleScale(): number {
+    return this.style === 'sticker' ? 1 : 1.03;
+  }
+
   private reparentUniform(object: THREE.Object3D, newParent: THREE.Object3D): void {
     object.updateWorldMatrix(true, false);
     newParent.updateWorldMatrix(true, false);
@@ -186,7 +190,8 @@ export abstract class PolyPuzzle implements Puzzle {
     this._local.decompose(this._pos, this._quat, this._scl);
     object.position.copy(this._pos);
     object.quaternion.copy(this._quat);
-    object.scale.set(1, 1, 1);
+    // Keep sticker/full-color scale; forcing 1 opens gaps that show the dark core.
+    object.scale.setScalar(this.styleScale());
     object.updateMatrix();
   }
 
@@ -273,7 +278,7 @@ export abstract class PolyPuzzle implements Puzzle {
       if (tile.mesh.parent !== this.group) this.group.add(tile.mesh);
       tile.mesh.matrix.copy(tile.initialMatrix);
       tile.mesh.matrix.decompose(tile.mesh.position, tile.mesh.quaternion, tile.mesh.scale);
-      tile.mesh.scale.setScalar(this.style === 'sticker' ? 1 : 1.03);
+      tile.mesh.scale.setScalar(this.styleScale());
       tile.mesh.updateMatrix();
     }
     this.history = [];

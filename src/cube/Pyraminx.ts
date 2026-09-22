@@ -33,12 +33,13 @@ export class Pyraminx extends PolyPuzzle {
       colorCss: CSS[i],
     }));
 
+    // Muted plastic core (not near-black) so any residual gaps read as grooves, not broken tiles.
     this.core = new THREE.Mesh(
-      new THREE.TetrahedronGeometry(2.62, 0),
+      new THREE.TetrahedronGeometry(2.55, 0),
       new THREE.MeshStandardMaterial({
-        color: 0x101116,
-        roughness: 0.62,
-        metalness: 0.04,
+        color: 0x3a3f4a,
+        roughness: 0.78,
+        metalness: 0.02,
         flatShading: true,
       }),
     );
@@ -64,7 +65,7 @@ export class Pyraminx extends PolyPuzzle {
 
       const addTri = (v0: THREE.Vector3, v1: THREE.Vector3, v2: THREE.Vector3) => {
         const centroid = v0.clone().add(v1).add(v2).multiplyScalar(1 / 3);
-        const shrink = (v: THREE.Vector3) => centroid.clone().lerp(v, 0.9);
+        const shrink = (v: THREE.Vector3) => centroid.clone().lerp(v, 0.97);
         const geo = new THREE.BufferGeometry().setFromPoints([shrink(v0), shrink(v1), shrink(v2)]);
         geo.setIndex([0, 1, 2]);
         let nearest = 0;
@@ -91,10 +92,13 @@ export class Pyraminx extends PolyPuzzle {
   protected selectLayer(move: FaceTurnMove): PolyTile[] {
     this.group.updateMatrixWorld(true);
     const axis = this.faceOf(move.face).axis;
-    const ranked = this.tiles
-      .map((tile) => ({ tile, d: this.tileWorldCenter(tile, this.scratch).dot(axis) }))
-      .sort((a, b) => b.d - a.d);
-    return ranked.slice(0, move.tip ? 3 : 15).map((x) => x.tile);
+    // Solved-state projections cluster with clear gaps (~1.92 tip / ~1.12 / ~0.72 / … / ~-0.95 opposite face).
+    // Tip: only the 3 facelets at that vertex. Deep: everything above the opposite face (3 faces × 9).
+    // Fixed count ranking (top 15) cut through a tied mid band and left holes → black patches.
+    const thresh = move.tip ? 1.5 : -0.7;
+    return this.tiles.filter(
+      (tile) => this.tileWorldCenter(tile, this.scratch).dot(axis) > thresh,
+    );
   }
 
   protected turnAngle(move: FaceTurnMove): number {
