@@ -9,10 +9,13 @@ const IDS = ['U', 'L', 'R', 'B'];
 /**
  * Facelet projections along a tip axis (solved, |vertex|=2.7) cluster at:
  *   ~1.92 tip (3) · ~1.12 axial wedges (3) · ~0.72 edge band (6)
- *   · ~-0.08 / ~-0.48 / ~-0.96 far / base (24)
+ *   · ~-0.08 / ~-0.48 / ~-0.96 far / base
  * Tip / 尖 = tip only (3): d > TIP_THRESH.
  * Deep / 层 = mid-band excluding tip (9): DEEP_THRESH < d ≤ TIP_THRESH.
- * Bottom / 底 = far cap / base about that tip (24): d ≤ DEEP_THRESH.
+ * Bottom / 底 = far cap about that tip, excluding ALL tip-band stickers (15):
+ *   d ≤ DEEP_THRESH AND not (dot(any tip axis) > TIP_THRESH).
+ * A real Pyraminx never moves tips except about their own tip axis; bottom
+ * must not carry foreign tip stickers (which sit at d_T ≈ -1/3 ≤ DEEP_THRESH).
  * Tip, mid, and bottom are independent C3-closed bands about each tip axis.
  */
 const TIP_THRESH = 1.5;
@@ -153,7 +156,10 @@ export class Pyraminx extends PolyPuzzle {
   /**
    * Swipe → tip-axis turn with tip / deep / bottom (尖 / 层 / 底).
    *
-   *   1. tip sticker or proj > TIP_THRESH → `{ tip: true }`
+   *   1. Tip under finger by **current world position** (authoritative):
+   *      argmax point·face.axis among faces with d > TIP_THRESH → `{ tip: true }`.
+   *      `tipPiece` is only a weak hint when it still projects > TIP_THRESH on
+   *      that same tip; never follow stale tipPiece to a tip the sticker left.
    *   2. else if hit is on the face opposite tip T (`faceIndex === T`) and
    *      the camera is outside that face → `{ bottom: true }` about T
    *   3. else if hit is in the far band of the camera-up tip
@@ -212,84 +218,91 @@ export class Pyraminx extends PolyPuzzle {
     let chosen: PolyFace | null = null;
     let mode: Mode = 'deep';
 
-    if (tipPiece >= 0 && tipPiece < this.faces.length) {
-      chosen = this.faces[tipPiece];
+    // Tip identity at swipe time: current world position, not stale tipPiece.
+    let tipByPos: PolyFace | null = null;
+    let tipDot = TIP_THRESH;
+    for (const f of this.faces) {
+      const d = point.dot(f.axis);
+      if (d > tipDot) {
+        tipDot = d;
+        tipByPos = f;
+      }
+    }
+    if (tipByPos) {
+      // tipPiece is a weak hint only when it still sits on this same tip.
+      if (tipPiece >= 0 && tipPiece < this.faces.length) {
+        const hinted = this.faces[tipPiece];
+        if (hinted.id === tipByPos.id && point.dot(hinted.axis) > TIP_THRESH) {
+          chosen = hinted;
+        } else {
+          chosen = tipByPos;
+        }
+      } else {
+        chosen = tipByPos;
+      }
       mode = 'tip';
     } else {
-      let tipByProj: PolyFace | null = null;
-      let tipDot = TIP_THRESH;
-      for (const f of this.faces) {
-        const d = point.dot(f.axis);
-        if (d > tipDot) {
-          tipDot = d;
-          tipByProj = f;
+      // Opposite-face non-tip, viewed from outside that face → bottom.
+      // (Do not trust tipPiece here — sticker is not on any tip vertex.)
+      if (faceIndex >= 0 && faceIndex < this.faces.length) {
+        const opp = this.faces[faceIndex];
+        const align = camPos.dot(opp.axis);
+        const viewingOpp =
+          align < 0 &&
+          this.faces.every(
+            (f, i) => i === faceIndex || camPos.dot(f.axis) > align + 1e-6,
+          );
+        if (viewingOpp) {
+          chosen = opp;
+          mode = 'bottom';
         }
       }
-      if (tipByProj) {
-        chosen = tipByProj;
-        mode = 'tip';
-      } else {
-        // Opposite-face non-tip, viewed from outside that face → bottom.
-        if (faceIndex >= 0 && faceIndex < this.faces.length && tipPiece < 0) {
-          const opp = this.faces[faceIndex];
-          const align = camPos.dot(opp.axis);
-          const viewingOpp =
-            align < 0 &&
-            this.faces.every(
-              (f, i) => i === faceIndex || camPos.dot(f.axis) > align + 1e-6,
-            );
-          if (viewingOpp) {
-            chosen = opp;
-            mode = 'bottom';
+
+      // Far band of the unique camera-up tip → bottom about that tip.
+      if (!chosen) {
+        let up: PolyFace | null = null;
+        let upDot = -Infinity;
+        let unique = false;
+        for (const f of this.faces) {
+          const d = camPos.dot(f.axis);
+          if (d > upDot + 1e-6) {
+            upDot = d;
+            up = f;
+            unique = true;
+          } else if (Math.abs(d - upDot) <= 1e-6) {
+            unique = false;
           }
         }
+        if (up && unique && point.dot(up.axis) <= DEEP_THRESH) {
+          chosen = up;
+          mode = 'bottom';
+        }
+      }
 
-        // Far band of the unique camera-up tip → bottom about that tip.
-        if (!chosen) {
-          let up: PolyFace | null = null;
-          let upDot = -Infinity;
-          let unique = false;
-          for (const f of this.faces) {
-            const d = camPos.dot(f.axis);
-            if (d > upDot + 1e-6) {
-              upDot = d;
-              up = f;
-              unique = true;
-            } else if (Math.abs(d - upDot) <= 1e-6) {
-              unique = false;
-            }
-          }
-          if (up && unique && point.dot(up.axis) <= DEEP_THRESH) {
-            chosen = up;
-            mode = 'bottom';
+      // Deep mid-band (and resolveHitFace), swipe-scored.
+      if (!chosen) {
+        const candidates: PolyFace[] = [];
+        for (const f of this.faces) {
+          const d = point.dot(f.axis);
+          if (d > DEEP_THRESH && d <= TIP_THRESH) candidates.push(f);
+        }
+        const resolved = this.resolveHitFace(point, normal);
+        if (resolved && !candidates.some((c) => c.id === resolved.id)) {
+          candidates.push(resolved);
+        }
+        if (!candidates.length) return null;
+
+        let bestScore = -Infinity;
+        for (const f of candidates) {
+          const r = scoreOnTip(f);
+          if (!r) continue;
+          if (r.score > bestScore) {
+            bestScore = r.score;
+            chosen = f;
           }
         }
-
-        // Deep mid-band (and resolveHitFace), swipe-scored.
-        if (!chosen) {
-          const candidates: PolyFace[] = [];
-          for (const f of this.faces) {
-            const d = point.dot(f.axis);
-            if (d > DEEP_THRESH && d <= TIP_THRESH) candidates.push(f);
-          }
-          const resolved = this.resolveHitFace(point, normal);
-          if (resolved && !candidates.some((c) => c.id === resolved.id)) {
-            candidates.push(resolved);
-          }
-          if (!candidates.length) return null;
-
-          let bestScore = -Infinity;
-          for (const f of candidates) {
-            const r = scoreOnTip(f);
-            if (!r) continue;
-            if (r.score > bestScore) {
-              bestScore = r.score;
-              chosen = f;
-            }
-          }
-          if (!chosen) chosen = candidates[0];
-          mode = 'deep';
-        }
+        if (!chosen) chosen = candidates[0];
+        mode = 'deep';
       }
     }
 
@@ -306,14 +319,23 @@ export class Pyraminx extends PolyPuzzle {
     };
   }
 
+  /** True if this world point currently sits in any tip band. */
+  private isAnyTipBand(center: THREE.Vector3): boolean {
+    for (const f of this.faces) {
+      if (center.dot(f.axis) > TIP_THRESH) return true;
+    }
+    return false;
+  }
+
   protected selectLayer(move: FaceTurnMove): PolyTile[] {
     this.group.updateMatrixWorld(true);
     const axis = this.faceOf(move.face).axis;
     if (move.bottom) {
-      // Bottom / 底: far cap about this tip (opposite face + adjacent base pieces).
-      return this.tiles.filter(
-        (tile) => this.tileWorldCenter(tile, this.scratch).dot(axis) <= DEEP_THRESH,
-      );
+      // Bottom / 底: far cap about this tip, never carrying tip stickers of any tip.
+      return this.tiles.filter((tile) => {
+        const center = this.tileWorldCenter(tile, this.scratch).clone();
+        return center.dot(axis) <= DEEP_THRESH && !this.isAnyTipBand(center);
+      });
     }
     if (move.tip) {
       // Tip / 尖: only the 3 facelets at that vertex.
@@ -431,9 +453,10 @@ export class Pyraminx extends PolyPuzzle {
       const d = this.tileWorldCenter(t, this.scratch).dot(axis);
       return d > DEEP_THRESH && d <= TIP_THRESH;
     });
-    const bottom = this.tiles.filter(
-      (t) => this.tileWorldCenter(t, this.scratch).dot(axis) <= DEEP_THRESH,
-    );
+    const bottom = this.tiles.filter((t) => {
+      const center = this.tileWorldCenter(t, this.scratch).clone();
+      return center.dot(axis) <= DEEP_THRESH && !this.isAnyTipBand(center);
+    });
     const q = new THREE.Quaternion().setFromAxisAngle(axis, (Math.PI * 2) / 3);
     const closed = (sel: PolyTile[]) =>
       sel.every((t) => {

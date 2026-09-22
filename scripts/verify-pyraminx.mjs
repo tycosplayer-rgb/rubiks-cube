@@ -5,11 +5,12 @@
  * Three independent bands about each tip axis:
  *   tip    = d > 1.5            → 3 facelets
  *   deep   = 0.4 < d ≤ 1.5      → 9 facelets (edges + axial; excludes tip)
- *   bottom = d ≤ 0.4            → 24 facelets (far cap / opposite face)
+ *   bottom = d ≤ 0.4 AND not on any tip band → 15 facelets (far cap; no tips)
  *
- * dragToMove: tip sticker → { tip:true };
+ * dragToMove: tip under finger by current world position → { tip:true };
  *             opposite-face center → { bottom:true };
  *             mid-band sticker → deep (tip/bottom falsy).
+ * After a bottom U turn, swipe on stickers now at tip L must return tip L (not U).
  */
 import { Pyraminx } from '../src/cube/Pyraminx.ts';
 import * as THREE from 'three';
@@ -122,9 +123,12 @@ const tipDrift = Math.max(0, ...tipIdx.map((i, j) => tipBefore[j].distanceTo(c[i
 // Bottom must not move tip or mid; tip/deep must not move bottom.
 p.reset();
 c = centers();
+const facesAll = p['faces'];
 const bottomIdx = [];
 c.forEach((pt, i) => {
-  if (pt.dot(axis) <= DEEP_THRESH) bottomIdx.push(i);
+  if (pt.dot(axis) > DEEP_THRESH) return;
+  if (facesAll.some((f) => pt.dot(f.axis) > TIP_THRESH)) return;
+  bottomIdx.push(i);
 });
 const bottomBefore = bottomIdx.map((i) => c[i].clone());
 const tipBefore2 = tipIdx.map((i) => c[i].clone());
@@ -292,6 +296,37 @@ const bDeepOk =
   bMidSel.length === 9 &&
   !bMidHitsTip;
 
+// --- After bottom U turn: tips stay put; bottom has zero tip-band stickers ---
+p.reset();
+applyInstant('U', 1, { bottom: true });
+p.group.updateMatrixWorld(true);
+const bottomSel = p['selectLayer']({ kind: 'face', face: 'U', steps: 1, bottom: true });
+const bottomHasTip = bottomSel.some((t) => {
+  const pt = worldCenterOf(t);
+  return faces.some((f) => pt.dot(f.axis) > TIP_THRESH);
+});
+const bottomNoTips = bottomSel.length === 15 && !bottomHasTip;
+
+// Tip identity by current position: even with tipPiece deliberately stale (claims U),
+// a sticker sitting at tip L must swipe as tip L — not U.
+const lFace = faces[1]; // L
+const lCam = makeCam(lFace.axis.clone().multiplyScalar(8));
+const atTipL = tiles
+  .map((t) => ({ t, d: worldCenterOf(t).dot(lFace.axis) }))
+  .filter((x) => x.d > TIP_THRESH)
+  .sort((a, b) => b.d - a.d)[0]?.t;
+const savedTipPiece = atTipL ? atTipL.mesh.userData.tipPiece : undefined;
+if (atTipL) atTipL.mesh.userData.tipPiece = 0; // stale claim: U
+const postBottomTipSwipe = atTipL
+  ? swipeMove(atTipL.mesh, worldCenterOf(atTipL), lCam)
+  : null;
+if (atTipL) atTipL.mesh.userData.tipPiece = savedTipPiece;
+const postBottomTipOk =
+  !!postBottomTipSwipe &&
+  postBottomTipSwipe.tip === true &&
+  postBottomTipSwipe.face === lFace.id &&
+  !postBottomTipSwipe.bottom;
+
 const tipButtons = p.getFaceButtons().filter((b) => b.tip);
 const bottomButtons = p.getFaceButtons().filter((b) => b.bottom);
 const faceIds = new Set(faces.map((f) => f.id));
@@ -301,7 +336,7 @@ const bottomButtonsOk = bottomButtons.length === 4 && bottomButtons.every((b) =>
 const pass =
   v.tipCount === 3 &&
   v.deepCount === 9 &&
-  v.bottomCount === 24 &&
+  v.bottomCount === 15 &&
   v.tipClosed &&
   v.deepClosed &&
   v.bottomClosed &&
@@ -312,7 +347,7 @@ const pass =
   v.bottomRoundTrip &&
   nDeep === 9 &&
   nTip === 3 &&
-  nBottom === 24 &&
+  nBottom === 15 &&
   roundTrip < 0.05 &&
   u3 < 0.05 &&
   tip3 < 0.05 &&
@@ -325,15 +360,17 @@ const pass =
   bottomDriftFromDeep < 0.05 &&
   tipIdx.length === 3 &&
   midIdx.length === 9 &&
-  bottomIdx.length === 24 &&
+  bottomIdx.length === 15 &&
   tipSwipeOk &&
   tipSwipeLayer === 3 &&
   deepSwipeOk &&
   bottomSwipeOk &&
-  bottomSwipeLayer === 24 &&
+  bottomSwipeLayer === 15 &&
   farSwipeBottom &&
   bTipOk &&
   bDeepOk &&
+  postBottomTipOk &&
+  bottomNoTips &&
   tipButtonsOk2 &&
   bottomButtonsOk;
 
@@ -371,6 +408,11 @@ console.log({
   bDeepOk,
   tipButtons: tipButtons.length,
   bottomButtons: bottomButtons.length,
+  postBottomTipSwipe,
+  postBottomTipOk,
+  bottomNoTips,
+  bottomSelCount: bottomSel.length,
+  bottomHasTip,
 });
 console.log(pass ? 'PASS' : 'FAIL');
 process.exit(pass ? 0 : 1);
