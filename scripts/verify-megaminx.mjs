@@ -237,7 +237,7 @@ const gap = maxFaceGap();
 
 
 
-// --- dragToMove multi-face finger-follows scoring ---
+// --- dragToMove: edge → side face (not F); center → F ---
 function makeCamera() {
   const cam = new THREE.PerspectiveCamera(42, 1, 0.1, 100);
   cam.position.set(0, 1.2, 9);
@@ -257,121 +257,195 @@ function layerFacesForPiece(pieceId) {
   return faces;
 }
 
-/** Mirror Megaminx.dragToMove scoring to predict the winner. */
-function scoreFaceSteps(point, faceId, steps, delta, cam) {
+/** Score ±1 steps on a single face (mirror of dragToMove direction scoring). */
+function bestStepsOnFace(point, faceId, delta, cam) {
   const f = m['faceOf'](faceId);
   const radial = point.clone().addScaledVector(f.axis, -point.dot(f.axis));
   const tangent = new THREE.Vector3().crossVectors(f.axis, radial);
-  if (tangent.lengthSq() < 1e-8) return -Infinity;
+  if (tangent.lengthSq() < 1e-8) return { steps: 1, score: -Infinity };
   tangent.normalize();
   const p0 = point.clone().project(cam);
-  const p1 = point.clone().addScaledVector(tangent, steps).project(cam);
-  let sx = p1.x - p0.x;
-  let sy = -(p1.y - p0.y);
-  const slen = Math.hypot(sx, sy);
-  if (slen < 1e-10) return -Infinity;
-  sx /= slen;
-  sy /= slen;
-  return delta.x * sx + delta.y * sy;
+  let best = { steps: 1, score: -Infinity };
+  for (const steps of [1, -1]) {
+    const p1 = point.clone().addScaledVector(tangent, steps).project(cam);
+    let sx = p1.x - p0.x;
+    let sy = -(p1.y - p0.y);
+    const slen = Math.hypot(sx, sy);
+    if (slen < 1e-10) continue;
+    sx /= slen;
+    sy /= slen;
+    const score = delta.x * sx + delta.y * sy;
+    if (score > best.score) best = { steps, score };
+  }
+  return best;
 }
 
 function assertDragScoring() {
   m.reset();
   const cam = makeCamera();
-  const edges = m['megaTiles'].filter((t) => t.kind === 'edge');
-  let checked = 0;
-  let multiCand = 0;
   let failures = 0;
-  let normalOverridden = 0;
+  let edgeChecked = 0;
+  let edgeSideOk = 0;
+  let centerChecked = 0;
+  let centerOk = 0;
+  let cornerChecked = 0;
+  let cornerOk = 0;
 
+  // Edge hit on front F: must turn the other face S ≠ F (侧面 of this 棱).
+  const edges = m['megaTiles'].filter((t) => t.kind === 'edge');
   for (const tile of edges) {
     const faces = layerFacesForPiece(tile.pieceId);
     if (faces.length < 2) continue;
-    multiCand++;
-    const point = m['tileWorldCenter'](tile).clone();
     const buildFace = m['faces'][tile.faceIndex];
+    const F = buildFace.id;
+    const sides = faces.filter((id) => id !== F);
+    if (sides.length !== 1) continue;
+    const expectFace = sides[0];
+    const point = m['tileWorldCenter'](tile).clone();
     const normal = buildFace.axis.clone();
 
-    // Cardinal swipes: result must be a candidate, and match argmax scoring.
     for (const delta of [
       new THREE.Vector2(-40, 0),
       new THREE.Vector2(40, 0),
       new THREE.Vector2(0, -40),
       new THREE.Vector2(0, 40),
     ]) {
-      let expectFace = null;
-      let expectSteps = 1;
-      let expectScore = 0;
-      for (const faceId of faces) {
-        for (const steps of [1, -1]) {
-          const s = scoreFaceSteps(point, faceId, steps, delta, cam);
-          if (s > expectScore) {
-            expectScore = s;
-            expectFace = faceId;
-            expectSteps = steps;
-          }
-        }
-      }
+      const { steps: expectSteps, score } = bestStepsOnFace(point, expectFace, delta, cam);
       const move = m.dragToMove(tile.mesh, normal, delta, cam, point);
-      checked++;
-      if (expectScore < 1e-6) {
+      edgeChecked++;
+      if (score < 1e-6) {
         if (move !== null) {
           failures++;
-          if (failures <= 5) console.error('expected null for weak swipe', { move, expectScore });
+          if (failures <= 5) console.error('edge: expected null for weak swipe', { move, score });
         }
         continue;
       }
-      if (!move || move.kind !== 'face' || move.face !== expectFace || move.steps !== expectSteps) {
+      // Must prefer adjacent face over F — never turn the front face for an edge hit.
+      if (!move || move.kind !== 'face' || move.face === F) {
         failures++;
         if (failures <= 5) {
-          console.error('drag argmax mismatch', {
+          console.error('edge: must turn side face not F', {
             pieceId: tile.pieceId,
-            delta: { x: delta.x, y: delta.y },
-            expect: { face: expectFace, steps: expectSteps, score: expectScore },
+            F,
+            expectFace,
             got: move,
             candidates: faces,
-            hitNormalFace: buildFace.id,
           });
         }
-      } else if (move.face !== buildFace.id && normal.dot(m['faceOf'](move.face).axis) < 0.9) {
-        // Hit normal belonged to build face, but motion picked a sibling layer.
-        normalOverridden++;
+        continue;
+      }
+      if (move.face !== expectFace || move.steps !== expectSteps) {
+        failures++;
+        if (failures <= 5) {
+          console.error('edge: side-face/steps mismatch', {
+            pieceId: tile.pieceId,
+            expect: { face: expectFace, steps: expectSteps, score },
+            got: move,
+          });
+        }
+      } else {
+        edgeSideOk++;
       }
     }
   }
 
-  // Explicit override case: hit normal = U, swipe matches a non-U sibling better.
-  let overrideDemo = false;
-  {
-    const uAxis = m['faceOf']('U').axis;
-    const delta = new THREE.Vector2(-50, 0);
-    for (const tile of edges) {
-      const faces = layerFacesForPiece(tile.pieceId);
-      if (!faces.includes('U') || faces.length < 2) continue;
-      const point = m['tileWorldCenter'](tile).clone();
-      let best = { face: null, steps: 1, score: 0 };
-      for (const faceId of faces) {
-        for (const steps of [1, -1]) {
-          const s = scoreFaceSteps(point, faceId, steps, delta, cam);
-          if (s > best.score) best = { face: faceId, steps, score: s };
+  // Center hit: turn F.
+  const centers = m['megaTiles'].filter((t) => t.kind === 'center');
+  for (const tile of centers) {
+    const buildFace = m['faces'][tile.faceIndex];
+    const F = buildFace.id;
+    const point = m['tileWorldCenter'](tile).clone();
+    const normal = buildFace.axis.clone();
+    for (const delta of [new THREE.Vector2(-40, 0), new THREE.Vector2(0, 40)]) {
+      const { steps: expectSteps, score } = bestStepsOnFace(point, F, delta, cam);
+      const move = m.dragToMove(tile.mesh, normal, delta, cam, point);
+      centerChecked++;
+      if (score < 1e-6) {
+        if (move !== null) {
+          failures++;
+          if (failures <= 5) console.error('center: expected null', { move, score });
+        }
+        continue;
+      }
+      if (!move || move.face !== F || move.steps !== expectSteps) {
+        failures++;
+        if (failures <= 5) {
+          console.error('center: must turn F', {
+            F,
+            expectSteps,
+            got: move,
+            pieceId: tile.pieceId,
+          });
+        }
+      } else {
+        centerOk++;
+      }
+    }
+  }
+
+  // Corner hit: turn one of the side faces (not F), chosen by swipe scoring.
+  const corners = m['megaTiles'].filter((t) => t.kind === 'corner');
+  for (const tile of corners) {
+    const faces = layerFacesForPiece(tile.pieceId);
+    const buildFace = m['faces'][tile.faceIndex];
+    const F = buildFace.id;
+    const sides = faces.filter((id) => id !== F);
+    if (sides.length < 1) continue;
+    const point = m['tileWorldCenter'](tile).clone();
+    const normal = buildFace.axis.clone();
+    for (const delta of [new THREE.Vector2(-40, 0), new THREE.Vector2(40, 0)]) {
+      let expectFace = null;
+      let expectSteps = 1;
+      let expectScore = 0;
+      for (const faceId of sides) {
+        const r = bestStepsOnFace(point, faceId, delta, cam);
+        if (r.score > expectScore) {
+          expectScore = r.score;
+          expectFace = faceId;
+          expectSteps = r.steps;
         }
       }
-      if (!best.face || best.face === 'U' || best.score < 1e-6) continue;
-      const move = m.dragToMove(tile.mesh, uAxis.clone(), delta, cam, point);
-      if (move && move.face === best.face && move.steps === best.steps) {
-        overrideDemo = true;
-        break;
+      const move = m.dragToMove(tile.mesh, normal, delta, cam, point);
+      cornerChecked++;
+      if (expectScore < 1e-6) {
+        if (move !== null) {
+          failures++;
+          if (failures <= 5) console.error('corner: expected null', { move, expectScore });
+        }
+        continue;
+      }
+      if (!move || move.face === F || move.face !== expectFace || move.steps !== expectSteps) {
+        failures++;
+        if (failures <= 5) {
+          console.error('corner: must pick side face by swipe', {
+            F,
+            sides,
+            expect: { face: expectFace, steps: expectSteps },
+            got: move,
+          });
+        }
+      } else {
+        cornerOk++;
       }
     }
   }
 
-  const ok = failures === 0 && checked > 0 && multiCand > 0 && (normalOverridden > 0 || overrideDemo);
+  const ok =
+    failures === 0 &&
+    edgeChecked > 0 &&
+    edgeSideOk > 0 &&
+    centerChecked > 0 &&
+    centerOk > 0 &&
+    cornerChecked > 0 &&
+    cornerOk > 0;
   console.log('dragScoring', {
-    checked,
-    multiCand,
+    edgeChecked,
+    edgeSideOk,
+    centerChecked,
+    centerOk,
+    cornerChecked,
+    cornerOk,
     failures,
-    normalOverridden,
-    overrideDemo,
     ok,
   });
   return ok;
