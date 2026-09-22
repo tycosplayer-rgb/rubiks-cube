@@ -66,3 +66,13 @@ npm run preview
 - Vite + TypeScript
 - Three.js / OrbitControls
 - cubejs（仅方块 3×3）
+
+### 金字塔（Pyraminx）
+- 四**尖轴** 120° 转动（非面转）：`U层`/`L层`/`R层`/`B层` 为深层（尖+邻边/轴心带，12 贴纸），`U尖`… 为只转尖（3 贴纸）
+- 打乱以深层尖轴为主，偶发尖拧；还原为历史逆序
+
+### 校验
+```bash
+npx tsx scripts/verify-pyraminx.mjs
+```
+
