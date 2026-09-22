@@ -13,53 +13,68 @@ const app = document.querySelector<HTMLDivElement>('#app')!;
 app.innerHTML = `
   <div id="canvas-wrap"></div>
   <div class="hud">
-    <div class="top-bar panel">
-      <div class="title">
-        在线魔方
-        <span id="subtitle">标准配色 · 2×2–7×7</span>
-        <span class="swatches" title="U白 D黄 F绿 B蓝 R红 L橙" aria-hidden="true">
-          <i style="background:${FACE_HEX.U}"></i><i style="background:${FACE_HEX.D}"></i>
-          <i style="background:${FACE_HEX.F}"></i><i style="background:${FACE_HEX.B}"></i>
-          <i style="background:${FACE_HEX.R}"></i><i style="background:${FACE_HEX.L}"></i>
-        </span>
+    <div class="top-bar panel" id="top-bar">
+      <div class="panel-chrome">
+        <div class="title">
+          在线魔方
+          <span id="subtitle">标准配色 · 2×2–7×7</span>
+          <span class="swatches" title="U白 D黄 F绿 B蓝 R红 L橙" aria-hidden="true">
+            <i style="background:${FACE_HEX.U}"></i><i style="background:${FACE_HEX.D}"></i>
+            <i style="background:${FACE_HEX.F}"></i><i style="background:${FACE_HEX.B}"></i>
+            <i style="background:${FACE_HEX.R}"></i><i style="background:${FACE_HEX.L}"></i>
+          </span>
+        </div>
+        <button type="button" class="panel-toggle" id="toggle-top" aria-expanded="true" aria-controls="top-bar-body" aria-label="收起顶部菜单" title="收起顶部菜单">
+          <span class="toggle-label">收起</span><span class="toggle-chevron" aria-hidden="true">▴</span>
+        </button>
       </div>
-      <div class="controls">
-        <label class="ctrl type-ctrl">魔方类型
-          <select id="puzzle-type">
-            <option value="cube">方块魔方</option>
-            <option value="pyraminx">金字塔</option>
-            <option value="megaminx">十二面体</option>
-          </select>
-        </label>
-        <label class="ctrl" id="order-ctrl">阶数
-          <select id="order">
-            ${[2, 3, 4, 5, 6, 7].map((n) => `<option value="${n}" ${n === 3 ? 'selected' : ''}>${n}×${n}×${n}</option>`).join('')}
-          </select>
-        </label>
-        <label class="ctrl">速度 <input id="speed" type="range" min="0.5" max="3" step="0.25" value="1" /></label>
-        <div class="mode-toggle" role="group" aria-label="操作模式">
-          <button type="button" class="mode-btn active" data-mode="smart" title="点色块拧层，空白转视角">智能</button>
-          <button type="button" class="mode-btn" data-mode="orbit" title="只旋转视角">视角</button>
-          <button type="button" class="mode-btn" data-mode="twist" title="只拧魔方层">拧动</button>
+      <div class="panel-body" id="top-bar-body">
+        <div class="controls">
+          <label class="ctrl type-ctrl">魔方类型
+            <select id="puzzle-type">
+              <option value="cube">方块魔方</option>
+              <option value="pyraminx">金字塔</option>
+              <option value="megaminx">十二面体</option>
+            </select>
+          </label>
+          <label class="ctrl" id="order-ctrl">阶数
+            <select id="order">
+              ${[2, 3, 4, 5, 6, 7].map((n) => `<option value="${n}" ${n === 3 ? 'selected' : ''}>${n}×${n}×${n}</option>`).join('')}
+            </select>
+          </label>
+          <label class="ctrl">速度 <input id="speed" type="range" min="0.5" max="3" step="0.25" value="1" /></label>
+          <div class="mode-toggle" role="group" aria-label="操作模式">
+            <button type="button" class="mode-btn active" data-mode="smart" title="点色块拧层，空白转视角">智能</button>
+            <button type="button" class="mode-btn" data-mode="orbit" title="只旋转视角">视角</button>
+            <button type="button" class="mode-btn" data-mode="twist" title="只拧魔方层">拧动</button>
+          </div>
+          <div class="mode-toggle style-toggle" role="group" aria-label="外观样式">
+            <button type="button" class="style-btn active" data-style="sticker">贴纸</button>
+            <button type="button" class="style-btn" data-style="full">全色</button>
+          </div>
+          <button id="btn-scramble" class="primary" type="button">打乱</button>
+          <button id="btn-solve" class="success" type="button">自动还原</button>
+          <button id="btn-reset" class="ghost" type="button">复位</button>
         </div>
-        <div class="mode-toggle style-toggle" role="group" aria-label="外观样式">
-          <button type="button" class="style-btn active" data-style="sticker">贴纸</button>
-          <button type="button" class="style-btn" data-style="full">全色</button>
-        </div>
-        <button id="btn-scramble" class="primary" type="button">打乱</button>
-        <button id="btn-solve" class="success" type="button">自动还原</button>
-        <button id="btn-reset" class="ghost" type="button">复位</button>
       </div>
     </div>
-    <div class="bottom-bar panel">
-      <div id="face-controls" class="face-controls hidden" aria-label="面转按钮"></div>
-      <div class="status-row">
-        <span id="status">就绪</span>
-        <span class="muted">步数 <strong id="moves">0</strong></span>
-        <span class="muted">打乱长度 <strong id="scramble-len">—</strong></span>
+    <div class="bottom-bar panel" id="bottom-bar">
+      <div class="panel-chrome">
+        <span class="panel-chrome-label">状态与面转</span>
+        <button type="button" class="panel-toggle" id="toggle-bottom" aria-expanded="true" aria-controls="bottom-bar-body" aria-label="收起底部菜单" title="收起底部菜单">
+          <span class="toggle-label">收起</span><span class="toggle-chevron" aria-hidden="true">▾</span>
+        </button>
       </div>
-      <div id="scramble-text" class="scramble-box">打乱公式将显示在这里</div>
-      <div id="hint" class="hint">智能：单指点色块拧层、点空白转视角；双指始终转视角 · 可切换「视角/拧动」锁定</div>
+      <div class="panel-body" id="bottom-bar-body">
+        <div id="face-controls" class="face-controls hidden" aria-label="面转按钮"></div>
+        <div class="status-row">
+          <span id="status">就绪</span>
+          <span class="muted">步数 <strong id="moves">0</strong></span>
+          <span class="muted">打乱长度 <strong id="scramble-len">—</strong></span>
+        </div>
+        <div id="scramble-text" class="scramble-box">打乱公式将显示在这里</div>
+        <div id="hint" class="hint">智能：单指点色块拧层、点空白转视角；双指始终转视角 · 可切换「视角/拧动」锁定</div>
+      </div>
     </div>
   </div>
 `;
@@ -257,6 +272,61 @@ function onResize(): void {
   camera.aspect = w / h; camera.updateProjectionMatrix();
   renderer.setPixelRatio(Math.min(window.devicePixelRatio || 1, dprCap)); renderer.setSize(w, h, false);
 }
+const TOP_OPEN_KEY = 'rubiks-top-bar-open';
+const BOTTOM_OPEN_KEY = 'rubiks-bottom-bar-open';
+const topBar = document.querySelector<HTMLDivElement>('#top-bar')!;
+const bottomBar = document.querySelector<HTMLDivElement>('#bottom-bar')!;
+const toggleTop = document.querySelector<HTMLButtonElement>('#toggle-top')!;
+const toggleBottom = document.querySelector<HTMLButtonElement>('#toggle-bottom')!;
+
+function loadPanelOpen(key: string, fallback = true): boolean {
+  try {
+    const v = localStorage.getItem(key);
+    if (v === '0') return false;
+    if (v === '1') return true;
+  } catch { /* ignore */ }
+  return fallback;
+}
+function savePanelOpen(key: string, open: boolean): void {
+  try { localStorage.setItem(key, open ? '1' : '0'); } catch { /* ignore */ }
+}
+function applyPanelCollapsed(
+  bar: HTMLElement,
+  btn: HTMLButtonElement,
+  open: boolean,
+  which: 'top' | 'bottom',
+): void {
+  bar.classList.toggle('collapsed', !open);
+  btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+  const label = open ? '收起' : '展开';
+  const where = which === 'top' ? '顶部菜单' : '底部菜单';
+  btn.setAttribute('aria-label', `${label}${where}`);
+  btn.title = `${label}${where}`;
+  const labelEl = btn.querySelector('.toggle-label');
+  const chevronEl = btn.querySelector('.toggle-chevron');
+  if (labelEl) labelEl.textContent = label;
+  if (chevronEl) {
+    if (which === 'top') chevronEl.textContent = open ? '▴' : '▾';
+    else chevronEl.textContent = open ? '▾' : '▴';
+  }
+}
+function setPanelOpen(which: 'top' | 'bottom', open: boolean, persist = true): void {
+  if (which === 'top') {
+    applyPanelCollapsed(topBar, toggleTop, open, 'top');
+    if (persist) savePanelOpen(TOP_OPEN_KEY, open);
+  } else {
+    applyPanelCollapsed(bottomBar, toggleBottom, open, 'bottom');
+    if (persist) savePanelOpen(BOTTOM_OPEN_KEY, open);
+  }
+  // Keep canvas sizing in sync if layout/viewport metrics shift after toggle.
+  requestAnimationFrame(() => onResize());
+}
+
+setPanelOpen('top', loadPanelOpen(TOP_OPEN_KEY, true), false);
+setPanelOpen('bottom', loadPanelOpen(BOTTOM_OPEN_KEY, true), false);
+toggleTop.addEventListener('click', () => setPanelOpen('top', topBar.classList.contains('collapsed')));
+toggleBottom.addEventListener('click', () => setPanelOpen('bottom', bottomBar.classList.contains('collapsed')));
+
 window.addEventListener('resize', onResize);
 function animate(now: number): void { requestAnimationFrame(animate); puzzle.update(now); controls.update(); renderer.render(scene, camera); }
 requestAnimationFrame(animate);

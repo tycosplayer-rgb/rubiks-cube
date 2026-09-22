@@ -65,10 +65,14 @@ body,
   left: 12px;
   right: 12px;
   display: flex;
-  flex-wrap: wrap;
+  flex-direction: column;
   gap: 10px;
-  align-items: center;
-  justify-content: space-between;
+  transition: padding 0.22s ease, gap 0.22s ease;
+}
+
+.top-bar.collapsed {
+  gap: 0;
+  padding: 6px 10px;
 }
 
 .title {
@@ -159,8 +163,86 @@ button.ghost {
   left: 12px;
   right: 12px;
   bottom: 12px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  transition: padding 0.22s ease, gap 0.22s ease;
+}
+
+.bottom-bar.collapsed {
+  gap: 0;
+  padding: 6px 10px;
+}
+
+.panel-chrome {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  min-height: 40px;
+}
+
+.panel-chrome-label {
+  font-size: 0.85rem;
+  font-weight: 600;
+  color: var(--muted);
+}
+
+.panel-toggle {
+  flex: 0 0 auto;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 4px;
+  min-width: 48px;
+  min-height: 40px;
+  padding: 8px 12px;
+  border-radius: 10px;
+  font-size: 0.85rem;
+  touch-action: manipulation;
+}
+
+.panel-toggle .toggle-chevron {
+  font-size: 0.95rem;
+  line-height: 1;
+}
+
+.panel-body {
   display: grid;
   gap: 8px;
+  overflow: hidden;
+  max-height: 70vh;
+  opacity: 1;
+  transform: translateY(0);
+  transition:
+    max-height 0.28s ease,
+    opacity 0.22s ease,
+    transform 0.22s ease,
+    margin 0.22s ease,
+    padding 0.22s ease;
+}
+
+.top-bar .panel-body {
+  display: block;
+}
+
+.top-bar.collapsed .panel-body,
+.bottom-bar.collapsed .panel-body {
+  max-height: 0;
+  opacity: 0;
+  margin: 0;
+  padding: 0;
+  transform: translateY(-4px);
+  pointer-events: none;
+}
+
+.bottom-bar.collapsed .panel-body {
+  transform: translateY(4px);
+}
+
+.top-bar.collapsed .title #subtitle,
+.top-bar.collapsed .title .swatches {
+  display: none;
 }
 
 .status-row {
@@ -208,7 +290,6 @@ button.ghost {
 
 @media (max-width: 640px) {
   .top-bar {
-    flex-direction: column;
     align-items: stretch;
   }
   .controls {
@@ -221,6 +302,14 @@ button.ghost {
     display: block;
     margin-left: 0;
     margin-top: 2px;
+  }
+  .panel-toggle {
+    min-width: 52px;
+    min-height: 44px;
+    padding: 10px 14px;
+  }
+  .top-bar.collapsed .title span {
+    display: none;
   }
 }
 
@@ -359,8 +448,9 @@ button.ghost {
 }
 
 @media (max-width: 640px) {
-  .top-bar { max-height: 48vh; overflow: auto; }
-  .bottom-bar { padding: 9px 10px; }
+  .top-bar:not(.collapsed) { max-height: 48vh; overflow: auto; }
+  .bottom-bar:not(.collapsed) { padding: 9px 10px; }
+  .bottom-bar.collapsed { padding: 6px 10px; }
   .face-controls { max-height: 96px; gap: 5px; }
   .face-turn-pair { grid-template-columns: auto 32px 32px; }
   .face-turn-pair button { min-height: 32px; }
