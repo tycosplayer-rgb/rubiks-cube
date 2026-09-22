@@ -1,6 +1,6 @@
 /**
  * Headless Megaminx star-cut / layer checks (no WebGL).
- * Run: npx tsx scripts/verify-megaminx.mjs
+ * Run: npm run verify:megaminx
  */
 import { Megaminx } from '../src/cube/Megaminx.ts';
 import * as THREE from 'three';
@@ -55,6 +55,36 @@ function maxDist(a, b) {
   return d;
 }
 
+function faceCounts() {
+  return m['faces'].map((f) => ({
+    face: f.id,
+    count: m.stickersOnFace(f.id).length,
+  }));
+}
+
+function assertCoverage(label) {
+  const counts = faceCounts();
+  const bad = counts.filter((c) => c.count !== 11);
+  if (bad.length) {
+    console.error(label, 'empty/partial faces', bad);
+    return false;
+  }
+  return true;
+}
+
+function layerMatchesFace(face) {
+  const onFace = m.stickersOnFace(face);
+  const selected = m['selectLayer']({ kind: 'face', face, steps: 1 });
+  const selSet = new Set(selected);
+  const missing = onFace.filter((t) => !selSet.has(t));
+  return {
+    layerCount: selected.length,
+    onFace: onFace.length,
+    missingOnFace: missing.length,
+    ok: selected.length === 26 && onFace.length === 11 && missing.length === 0,
+  };
+}
+
 const before = centers();
 const nLayer = applyInstant('U', 1);
 applyInstant('U', -1);
@@ -73,6 +103,59 @@ applyInstant('U', -1);
 applyInstant('R', -1);
 const commute = maxDist(b2, centers());
 
+// After adjacent turns, layer must still track CURRENT face occupancy.
+m.reset();
+applyInstant('R', 1);
+applyInstant('FR', 1);
+const afterAdj = layerMatchesFace('U');
+console.log('after R,FR layer U', afterAdj);
+
+m.reset();
+const faces = m['faces'].map((f) => f.id);
+const seq = [];
+let prev = '';
+for (let i = 0; i < 24; i++) {
+  let face = faces[Math.floor(Math.random() * faces.length)];
+  while (face === prev) face = faces[Math.floor(Math.random() * faces.length)];
+  prev = face;
+  const steps = Math.random() < 0.5 ? 1 : -1;
+  seq.push({ face, steps });
+  const n = applyInstant(face, steps);
+  if (n !== 26) {
+    console.error('bad layer size at move', i + 1, face, n);
+  }
+}
+const afterScramble = assertCoverage('after 24 random');
+const midLayer = layerMatchesFace(seq[seq.length - 1]?.face ?? 'U');
+
+// Inverse the sequence — every face must stay covered, then restore.
+for (let i = seq.length - 1; i >= 0; i--) {
+  applyInstant(seq[i].face, -seq[i].steps);
+}
+const afterInverse = assertCoverage('after inverse');
+const restored = maxDist(before, centers());
+
+// Large-gap heuristic: each face's 11 stickers should sit in a tight proj band.
+function maxFaceGap() {
+  let worst = 0;
+  for (const f of m['faces']) {
+    const axis = f.axis;
+    const projs = m
+      .stickersOnFace(f.id)
+      .map((t) => m['tileWorldCenter'](t).dot(axis))
+      .sort((a, b) => a - b);
+    if (projs.length !== 11) {
+      worst = Infinity;
+      continue;
+    }
+    worst = Math.max(worst, projs[projs.length - 1] - projs[0]);
+  }
+  return worst;
+}
+m.reset();
+for (const { face, steps } of seq) applyInstant(face, steps);
+const gap = maxFaceGap();
+
 const pass =
   v.tiles === 132 &&
   v.perFace === 11 &&
@@ -82,11 +165,29 @@ const pass =
   v.corners === 60 &&
   v.layerClosed &&
   v.fiveTurnClosed &&
+  v.pieceGraphOk &&
   nLayer === 26 &&
   roundTrip < 0.05 &&
   five < 0.05 &&
-  commute < 0.05;
+  commute < 0.05 &&
+  afterAdj.ok &&
+  afterScramble &&
+  midLayer.ok &&
+  afterInverse &&
+  restored < 0.05 &&
+  gap < 0.08;
 
-console.log({ nLayer, roundTrip, five, commute });
+console.log({
+  nLayer,
+  roundTrip,
+  five,
+  commute,
+  afterAdj,
+  midLayer,
+  afterScramble,
+  afterInverse,
+  restored,
+  gap,
+});
 console.log(pass ? 'PASS' : 'FAIL');
 process.exit(pass ? 0 : 1);
