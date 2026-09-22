@@ -255,14 +255,19 @@ export class RubiksCube {
     }
   }
 
-  /** Grayscale map: white rounded sticker × material.color, dark rim = plastic border. */
+  /**
+   * Grayscale map: white rounded sticker × material.color / emissive.
+   * Outer rim must be pure black (#000) so color×map and emissive×emissiveMap
+   * stay neutral plastic (not face-tinted dark red/blue/etc).
+   */
   private createStickerBorderMap(): THREE.CanvasTexture {
     const size = 128;
     const canvas = document.createElement('canvas');
     canvas.width = size;
     canvas.height = size;
     const ctx = canvas.getContext('2d')!;
-    ctx.fillStyle = '#141414';
+    // Pure black rim: any face color × 0 = black, matching plastic across faces.
+    ctx.fillStyle = '#000000';
     ctx.fillRect(0, 0, size, size);
     const inset = STICKER_INSET * size;
     const r = STICKER_CORNER * size;
