@@ -24,4 +24,8 @@ export default defineConfig({
     target: 'es2020',
     outDir: 'dist',
   },
+  // Allow Tunnelmole / other reverse-proxy Host headers during `vite preview`.
+  preview: {
+    allowedHosts: true,
+  },
 });
