@@ -112,6 +112,13 @@ export abstract class PolyPuzzle implements Puzzle {
     if (this.core) this.core.castShadow = this.core.receiveShadow = enabled;
   }
 
+
+  /** Pull core inward while a layer spins so shear gaps do not flash black. */
+  protected setCoreTurnSafe(animating: boolean): void {
+    if (!this.core) return;
+    this.core.scale.setScalar(animating ? 0.93 : 1);
+  }
+
   setVisualStyle(style: VisualStyle): void {
     if (style !== 'sticker' && style !== 'full') return;
     this.style = style;
@@ -145,6 +152,7 @@ export abstract class PolyPuzzle implements Puzzle {
       this.history.push({ ...a.move });
       this.emit({ type: 'move', notation: this.notation(a.move), historyLen: this.history.length });
     }
+    this.setCoreTurnSafe(false);
     this.turnAnim = null;
     this.busy = false;
     if (!this.locked) this.emit({ type: 'busy', busy: false });
@@ -165,6 +173,7 @@ export abstract class PolyPuzzle implements Puzzle {
       this.pivot.rotation.set(0, 0, 0);
       this.pivot.scale.set(1, 1, 1);
       for (const tile of selected) this.reparentUniform(tile.mesh, this.pivot);
+      this.setCoreTurnSafe(true);
       this.turnAnim = {
         move: { ...move },
         selected,
@@ -274,6 +283,7 @@ export abstract class PolyPuzzle implements Puzzle {
 
   reset(): void {
     if (this.isBusy()) return;
+    this.setCoreTurnSafe(false);
     for (const tile of this.tiles) {
       if (tile.mesh.parent !== this.group) this.group.add(tile.mesh);
       tile.mesh.matrix.copy(tile.initialMatrix);
@@ -379,6 +389,7 @@ export abstract class PolyPuzzle implements Puzzle {
       const r = this.turnAnim.resolve;
       this.turnAnim = null;
       this.busy = false;
+      this.setCoreTurnSafe(false);
       r();
     }
     for (const { mesh } of this.tiles) {

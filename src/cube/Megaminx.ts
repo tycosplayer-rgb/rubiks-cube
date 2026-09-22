@@ -14,7 +14,11 @@ const INNER_SCALE = 0.40;
 /** Corner tip depth along each outer edge (fraction of edge length from the vertex). */
 const CORNER_EDGE_T = 0.32;
 /** Geometry inset for grooves (keep gaps via mesh, not styleScale). */
-const STICKER_SHRINK = 0.985;
+const STICKER_SHRINK = 0.992;
+/** Push facelets outward along normals so spinning layers clear the core. */
+const FACELET_OUTSET = 0.065;
+/** Core circumradius — smaller than sticker shell to avoid mid-turn peek / clip. */
+const CORE_RADIUS = 2.32;
 /** Merge dodecahedron vertices closer than this into one canonical point. */
 const VERT_EPS = 1e-4;
 /**
@@ -102,16 +106,20 @@ export class Megaminx extends PolyPuzzle {
       colorCss: CSS[i],
     }));
 
-    // Slightly smaller muted core so inset stickers fully cover it.
+    // Recessed soft-gray core: mid-turn shear gaps show plastic, not black clip.
     this.core = new THREE.Mesh(
-      new THREE.DodecahedronGeometry(2.52, 0),
+      new THREE.DodecahedronGeometry(CORE_RADIUS, 0),
       new THREE.MeshStandardMaterial({
-        color: 0x4a5568,
-        roughness: 0.78,
-        metalness: 0.02,
+        color: 0x8b929c,
+        roughness: 0.85,
+        metalness: 0.0,
         flatShading: true,
+        polygonOffset: true,
+        polygonOffsetFactor: 2,
+        polygonOffsetUnits: 2,
       }),
     );
+    this.core.renderOrder = -1;
     this.group.add(this.core);
 
     // Stable ids from canonical (merged) vertices.
@@ -139,8 +147,8 @@ export class Megaminx extends PolyPuzzle {
         return aa - bb;
       });
 
-      const points = raw.map((p) => p.clone().addScaledVector(normal, 0.045));
-      const c = center.clone().addScaledVector(normal, 0.045);
+      const points = raw.map((p) => p.clone().addScaledVector(normal, FACELET_OUTSET));
+      const c = center.clone().addScaledVector(normal, FACELET_OUTSET);
       const inner = points.map((p) => c.clone().lerp(p, INNER_SCALE));
 
       const addPoly = (
@@ -165,8 +173,9 @@ export class Megaminx extends PolyPuzzle {
         tile.mesh.userData.faceIndex = faceIndex;
         // Pull stickers in front of the core; avoids z-fight without scaling.
         tile.mesh.material.polygonOffset = true;
-        tile.mesh.material.polygonOffsetFactor = -2;
-        tile.mesh.material.polygonOffsetUnits = -2;
+        tile.mesh.material.polygonOffsetFactor = -4;
+        tile.mesh.material.polygonOffsetUnits = -4;
+        tile.mesh.renderOrder = 1;
         this.megaTiles.push(tile);
       };
 
