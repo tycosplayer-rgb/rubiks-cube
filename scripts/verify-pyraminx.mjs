@@ -1,9 +1,16 @@
 /**
  * Headless Pyraminx layer checks (no WebGL).
  * Run: npx tsx scripts/verify-pyraminx.mjs
+ *
+ * Tip (角) and deep/mid (棱层) turn independently:
+ *   tip  = d > 1.5            → 3 facelets
+ *   deep = 0.4 < d ≤ 1.5      → 9 facelets (edges + axial; excludes tip)
  */
 import { Pyraminx } from '../src/cube/Pyraminx.ts';
 import * as THREE from 'three';
+
+const TIP_THRESH = 1.5;
+const DEEP_THRESH = 0.4;
 
 const p = new Pyraminx('sticker');
 const v = p.debugVerifyLayers();
@@ -74,32 +81,59 @@ applyInstant('U', 1, true);
 applyInstant('U', 1, true);
 const tip3 = maxDist(bt, centers());
 
+// Tip turn must not move mid-layer (0.4 < d ≤ 1.5).
 p.reset();
 const axis = p['faces'][0].axis;
 let c = centers();
 const midIdx = [];
 c.forEach((pt, i) => {
   const d = pt.dot(axis);
-  if (d > 0.4 && d <= 1.5) midIdx.push(i);
+  if (d > DEEP_THRESH && d <= TIP_THRESH) midIdx.push(i);
 });
 const midBefore = midIdx.map((i) => c[i].clone());
 applyInstant('U', 1, true);
 c = centers();
 const midDrift = Math.max(0, ...midIdx.map((i, j) => midBefore[j].distanceTo(c[i])));
 
+// NEW: deep turn must not move that vertex's 3 tip tiles (d > 1.5).
+p.reset();
+c = centers();
+const tipIdx = [];
+c.forEach((pt, i) => {
+  if (pt.dot(axis) > TIP_THRESH) tipIdx.push(i);
+});
+const tipBefore = tipIdx.map((i) => c[i].clone());
+applyInstant('U', 1, false);
+c = centers();
+const tipDrift = Math.max(0, ...tipIdx.map((i, j) => tipBefore[j].distanceTo(c[i])));
+
 const pass =
   v.tipCount === 3 &&
-  v.deepCount === 12 &&
+  v.deepCount === 9 &&
   v.tipClosed &&
   v.deepClosed &&
   v.tipLeavesMid &&
-  nDeep === 12 &&
+  v.deepLeavesTip &&
+  nDeep === 9 &&
   nTip === 3 &&
   roundTrip < 0.05 &&
   u3 < 0.05 &&
   tip3 < 0.05 &&
-  midDrift < 0.05;
+  midDrift < 0.05 &&
+  tipDrift < 0.05 &&
+  tipIdx.length === 3 &&
+  midIdx.length === 9;
 
-console.log({ nDeep, nTip, roundTrip, u3, tip3, midDrift, midCount: midIdx.length });
+console.log({
+  nDeep,
+  nTip,
+  roundTrip,
+  u3,
+  tip3,
+  midDrift,
+  tipDrift,
+  midCount: midIdx.length,
+  tipCount: tipIdx.length,
+});
 console.log(pass ? 'PASS' : 'FAIL');
 process.exit(pass ? 0 : 1);

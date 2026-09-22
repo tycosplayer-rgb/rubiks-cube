@@ -218,7 +218,7 @@ function updateTypeUI(): void {
   hintEl.textContent = isCube
     ? '智能：单指点色块拧层、点空白转视角；双指始终转视角 · 可切换「视角/拧动」锁定'
     : currentType === 'pyraminx'
-      ? '尖轴按钮：U层/L层…为深层（尖+邻层），U尖…为只转尖；也可拖色块绕近尖转动，空白处转视角'
+      ? '尖轴按钮：U层/L层…为棱层（不含尖），U尖…为只转尖角；角与棱独立；也可拖色块绕近尖转动，空白处转视角'
       : '使用上方面转按钮可靠操作（↻/↺）；也可拖动色块尝试面转，空白处拖动旋转视角 · 双指缩放';
   faceControls.setAttribute(
     'aria-label',

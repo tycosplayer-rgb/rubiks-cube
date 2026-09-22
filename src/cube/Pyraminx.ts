@@ -9,9 +9,9 @@ const IDS = ['U', 'L', 'R', 'B'];
 /**
  * Facelet projections along a tip axis (solved, |vertex|=2.7) cluster at:
  *   ~1.92 tip (3) · ~1.12 axial wedges (3) · ~0.72 edge band (6) · lower fixed
- * Tip layer = tip only (3). Deep layer = tip+axial+edge = 12 (C3-closed).
- * The old deep cut at -0.7 selected 27 tiles (three full faces) and split the
- * three opposite tip pieces — illegal motion that looked like broken animation.
+ * Tip layer = tip only (3): d > TIP_THRESH.
+ * Deep / 棱层 = mid-band excluding tip (9): DEEP_THRESH < d ≤ TIP_THRESH.
+ * Tips and edges turn independently — deep must not move the vertex tip tiles.
  */
 const TIP_THRESH = 1.5;
 const DEEP_THRESH = 0.4;
@@ -151,10 +151,17 @@ export class Pyraminx extends PolyPuzzle {
   protected selectLayer(move: FaceTurnMove): PolyTile[] {
     this.group.updateMatrixWorld(true);
     const axis = this.faceOf(move.face).axis;
-    const thresh = move.tip ? TIP_THRESH : DEEP_THRESH;
-    return this.tiles.filter(
-      (tile) => this.tileWorldCenter(tile, this.scratch).dot(axis) > thresh,
-    );
+    if (move.tip) {
+      // Tip / 角: only the 3 facelets at that vertex.
+      return this.tiles.filter(
+        (tile) => this.tileWorldCenter(tile, this.scratch).dot(axis) > TIP_THRESH,
+      );
+    }
+    // Deep / 棱层: C3-closed mid-band excluding tip (edges + axial wedges).
+    return this.tiles.filter((tile) => {
+      const d = this.tileWorldCenter(tile, this.scratch).dot(axis);
+      return d > DEEP_THRESH && d <= TIP_THRESH;
+    });
   }
 
   protected turnAngle(move: FaceTurnMove): number {
@@ -166,8 +173,8 @@ export class Pyraminx extends PolyPuzzle {
   }
 
   /**
-   * Scramble with mostly deep tip-axis turns; tip-only twists are rare (~15%).
-   * Overrides PolyPuzzle so we can set `tip` occasionally.
+   * Scramble with mostly deep (edge) tip-axis turns; tip-only twists are rare (~15%).
+   * Deep and tip are independent — deep never couples tip stickers.
    */
   async scramble(): Promise<void> {
     if (this.isBusy()) return;
@@ -231,26 +238,30 @@ export class Pyraminx extends PolyPuzzle {
     tipClosed: boolean;
     deepClosed: boolean;
     tipLeavesMid: boolean;
+    deepLeavesTip: boolean;
     deepRoundTrip: boolean;
   } {
     this.group.updateMatrixWorld(true);
     const axis = this.faces[0].axis;
     const slots = this.tiles.map((t) => this.tileWorldCenter(t).clone());
     const tip = this.tiles.filter((t) => this.tileWorldCenter(t, this.scratch).dot(axis) > TIP_THRESH);
-    const deep = this.tiles.filter((t) => this.tileWorldCenter(t, this.scratch).dot(axis) > DEEP_THRESH);
+    const deep = this.tiles.filter((t) => {
+      const d = this.tileWorldCenter(t, this.scratch).dot(axis);
+      return d > DEEP_THRESH && d <= TIP_THRESH;
+    });
     const q = new THREE.Quaternion().setFromAxisAngle(axis, (Math.PI * 2) / 3);
     const closed = (sel: PolyTile[]) =>
       sel.every((t) => {
         const dest = this.tileWorldCenter(t).applyQuaternion(q);
         return slots.some((s) => s.distanceTo(dest) < 0.08);
       });
-    // Tip must not include mid-layer (0.4 < d <= 1.5) tiles.
-    const mid = this.tiles.filter((t) => {
-      const d = this.tileWorldCenter(t, this.scratch).dot(axis);
-      return d > DEEP_THRESH && d <= TIP_THRESH;
-    });
+    // Tip must not include mid-layer tiles.
+    const mid = deep;
     const tipSet = new Set(tip);
+    const deepSet = new Set(deep);
     const tipLeavesMid = mid.every((t) => !tipSet.has(t));
+    // Deep must not include tip tiles.
+    const deepLeavesTip = tip.every((t) => !deepSet.has(t));
 
     // Three deep U turns: centers return (apply virtual rotations to copies).
     let ok = true;
@@ -265,6 +276,7 @@ export class Pyraminx extends PolyPuzzle {
       tipClosed: closed(tip),
       deepClosed: closed(deep),
       tipLeavesMid,
+      deepLeavesTip,
       deepRoundTrip: ok,
     };
   }
