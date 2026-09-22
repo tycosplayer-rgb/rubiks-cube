@@ -2,12 +2,14 @@
  * Headless Pyraminx layer checks (no WebGL).
  * Run: npx tsx scripts/verify-pyraminx.mjs
  *
- * Tip (角) and deep/mid (棱层) turn independently:
- *   tip  = d > 1.5            → 3 facelets
- *   deep = 0.4 < d ≤ 1.5      → 9 facelets (edges + axial; excludes tip)
+ * Three independent bands about each tip axis:
+ *   tip    = d > 1.5            → 3 facelets
+ *   deep   = 0.4 < d ≤ 1.5      → 9 facelets (edges + axial; excludes tip)
+ *   bottom = d ≤ 0.4            → 24 facelets (far cap / opposite face)
  *
- * dragToMove: tip sticker → { tip:true, face: that tip };
- *             mid-band sticker → tip falsy, selectLayer is deep-only.
+ * dragToMove: tip sticker → { tip:true };
+ *             opposite-face center → { bottom:true };
+ *             mid-band sticker → deep (tip/bottom falsy).
  */
 import { Pyraminx } from '../src/cube/Pyraminx.ts';
 import * as THREE from 'three';
@@ -43,8 +45,8 @@ function reparent(obj, newParent) {
   obj.updateMatrix();
 }
 
-function applyInstant(face, steps, tip) {
-  const move = { kind: 'face', face, steps, tip };
+function applyInstant(face, steps, flags = {}) {
+  const move = { kind: 'face', face, steps, ...flags };
   const selected = p['selectLayer'](move);
   const axis = p['faceOf'](face).axis;
   const angle = p['turnAngle'](move);
@@ -66,23 +68,30 @@ function maxDist(a, b) {
 }
 
 const before = centers();
-const nDeep = applyInstant('U', 1, false);
-applyInstant('U', -1, false);
+const nDeep = applyInstant('U', 1, {});
+applyInstant('U', -1, {});
 const roundTrip = maxDist(before, centers());
 
 p.reset();
 const b3 = centers();
-applyInstant('U', 1, false);
-applyInstant('U', 1, false);
-applyInstant('U', 1, false);
+applyInstant('U', 1, {});
+applyInstant('U', 1, {});
+applyInstant('U', 1, {});
 const u3 = maxDist(b3, centers());
 
 p.reset();
 const bt = centers();
-const nTip = applyInstant('U', 1, true);
-applyInstant('U', 1, true);
-applyInstant('U', 1, true);
+const nTip = applyInstant('U', 1, { tip: true });
+applyInstant('U', 1, { tip: true });
+applyInstant('U', 1, { tip: true });
 const tip3 = maxDist(bt, centers());
+
+p.reset();
+const bb = centers();
+const nBottom = applyInstant('U', 1, { bottom: true });
+applyInstant('U', 1, { bottom: true });
+applyInstant('U', 1, { bottom: true });
+const bottom3 = maxDist(bb, centers());
 
 // Tip turn must not move mid-layer (0.4 < d ≤ 1.5).
 p.reset();
@@ -94,11 +103,11 @@ c.forEach((pt, i) => {
   if (d > DEEP_THRESH && d <= TIP_THRESH) midIdx.push(i);
 });
 const midBefore = midIdx.map((i) => c[i].clone());
-applyInstant('U', 1, true);
+applyInstant('U', 1, { tip: true });
 c = centers();
 const midDrift = Math.max(0, ...midIdx.map((i, j) => midBefore[j].distanceTo(c[i])));
 
-// NEW: deep turn must not move that vertex's 3 tip tiles (d > 1.5).
+// Deep turn must not move tip tiles.
 p.reset();
 c = centers();
 const tipIdx = [];
@@ -106,11 +115,40 @@ c.forEach((pt, i) => {
   if (pt.dot(axis) > TIP_THRESH) tipIdx.push(i);
 });
 const tipBefore = tipIdx.map((i) => c[i].clone());
-applyInstant('U', 1, false);
+applyInstant('U', 1, {});
 c = centers();
 const tipDrift = Math.max(0, ...tipIdx.map((i, j) => tipBefore[j].distanceTo(c[i])));
 
-// --- dragToMove: tip sticker → 角层; mid-band → 棱层 (deep only) ---
+// Bottom must not move tip or mid; tip/deep must not move bottom.
+p.reset();
+c = centers();
+const bottomIdx = [];
+c.forEach((pt, i) => {
+  if (pt.dot(axis) <= DEEP_THRESH) bottomIdx.push(i);
+});
+const bottomBefore = bottomIdx.map((i) => c[i].clone());
+const tipBefore2 = tipIdx.map((i) => c[i].clone());
+const midBefore2 = midIdx.map((i) => c[i].clone());
+applyInstant('U', 1, { bottom: true });
+c = centers();
+const tipDriftFromBottom = Math.max(0, ...tipIdx.map((i, j) => tipBefore2[j].distanceTo(c[i])));
+const midDriftFromBottom = Math.max(0, ...midIdx.map((i, j) => midBefore2[j].distanceTo(c[i])));
+
+p.reset();
+c = centers();
+const bottomBeforeTip = bottomIdx.map((i) => c[i].clone());
+applyInstant('U', 1, { tip: true });
+c = centers();
+const bottomDriftFromTip = Math.max(0, ...bottomIdx.map((i, j) => bottomBeforeTip[j].distanceTo(c[i])));
+
+p.reset();
+c = centers();
+const bottomBeforeDeep = bottomIdx.map((i) => c[i].clone());
+applyInstant('U', 1, {});
+c = centers();
+const bottomDriftFromDeep = Math.max(0, ...bottomIdx.map((i, j) => bottomBeforeDeep[j].distanceTo(c[i])));
+
+// --- dragToMove ---
 p.reset();
 p.group.updateMatrixWorld(true);
 const tiles = p['tiles'];
@@ -160,7 +198,8 @@ const tipSwipeOk =
   !!tipSwipe &&
   tipSwipe.kind === 'face' &&
   tipSwipe.face === uFace.id &&
-  tipSwipe.tip === true;
+  tipSwipe.tip === true &&
+  !tipSwipe.bottom;
 const tipSwipeLayer = tipSwipe ? p['selectLayer'](tipSwipe).length : 0;
 
 const uMidTile = tiles
@@ -176,21 +215,64 @@ const deepSwipeOk =
   !!deepSwipe &&
   deepSwipe.kind === 'face' &&
   !deepSwipe.tip &&
+  !deepSwipe.bottom &&
   deepSel.length === 9 &&
   !deepHitsTip;
 
-// Bottom / downward tip: swipe its tip sticker → 角层 of that tip (not the upper mid-band).
-let bottomIdx = 0;
+// Opposite-face center (faceIndex === tipIndex U=0), view from below → bottom.
+const oppCam = makeCam(uFace.axis.clone().multiplyScalar(-8));
+const oppCenter = tiles
+  .map((t) => {
+    const pt = worldCenterOf(t);
+    const ds = faces.map((f) => pt.dot(f.axis));
+    const maxSide = Math.max(...ds.filter((_, i) => i !== 0));
+    return {
+      t,
+      faceIndex: t.mesh.userData.faceIndex,
+      tip: t.mesh.userData.tipPiece ?? -1,
+      dU: pt.dot(uFace.axis),
+      maxSide,
+      pt,
+    };
+  })
+  .filter((x) => x.faceIndex === 0 && x.tip < 0)
+  .sort((a, b) => a.maxSide - b.maxSide)[0];
+const bottomSwipe = oppCenter
+  ? swipeMove(oppCenter.t.mesh, oppCenter.pt, oppCam)
+  : null;
+const bottomSwipeOk =
+  !!bottomSwipe &&
+  bottomSwipe.kind === 'face' &&
+  bottomSwipe.face === uFace.id &&
+  bottomSwipe.bottom === true &&
+  !bottomSwipe.tip;
+const bottomSwipeLayer = bottomSwipe ? p['selectLayer'](bottomSwipe).length : 0;
+
+// Far-band side sticker with tip U up (camera along +U) → bottom about U.
+const farTile = tiles
+  .map((t) => ({ t, d: worldCenterOf(t).dot(uFace.axis), tip: t.mesh.userData.tipPiece ?? -1, fi: t.mesh.userData.faceIndex }))
+  .filter((x) => x.tip < 0 && x.d <= DEEP_THRESH && x.fi !== 0)
+  .sort((a, b) => a.d - b.d)[0]?.t;
+const farPt = farTile ? worldCenterOf(farTile) : null;
+const farSwipe = farTile ? swipeMove(farTile.mesh, farPt, uCam) : null;
+const farSwipeBottom =
+  !!farSwipe &&
+  farSwipe.face === uFace.id &&
+  farSwipe.bottom === true &&
+  !farSwipe.tip;
+
+// Downward tip tip/deep still work.
+let downIdx = 0;
 let minY = Infinity;
 faces.forEach((f, i) => {
   if (f.axis.y < minY) {
     minY = f.axis.y;
-    bottomIdx = i;
+    downIdx = i;
   }
 });
-const bFace = faces[bottomIdx];
+const bFace = faces[downIdx];
 const bCam = makeCam(bFace.axis.clone().multiplyScalar(8));
-const bTipTile = tiles.find((t) => t.mesh.userData.tipPiece === bottomIdx);
+const bTipTile = tiles.find((t) => t.mesh.userData.tipPiece === downIdx);
 const bTipSwipe = swipeMove(bTipTile.mesh, worldCenterOf(bTipTile), bCam);
 const bTipOk =
   !!bTipSwipe && bTipSwipe.tip === true && bTipSwipe.face === bFace.id;
@@ -205,58 +287,90 @@ const bMidHitsTip = bMidSel.some((t) => worldCenterOf(t).dot(bMidAxis) > TIP_THR
 const bDeepOk =
   !!bMidSwipe &&
   !bMidSwipe.tip &&
+  !bMidSwipe.bottom &&
   bMidSwipe.face === bFace.id &&
   bMidSel.length === 9 &&
   !bMidHitsTip;
 
 const tipButtons = p.getFaceButtons().filter((b) => b.tip);
+const bottomButtons = p.getFaceButtons().filter((b) => b.bottom);
 const faceIds = new Set(faces.map((f) => f.id));
 const tipButtonsOk2 = tipButtons.length === 4 && tipButtons.every((b) => faceIds.has(b.id));
+const bottomButtonsOk = bottomButtons.length === 4 && bottomButtons.every((b) => faceIds.has(b.id));
 
 const pass =
   v.tipCount === 3 &&
   v.deepCount === 9 &&
+  v.bottomCount === 24 &&
   v.tipClosed &&
   v.deepClosed &&
+  v.bottomClosed &&
   v.tipLeavesMid &&
   v.deepLeavesTip &&
+  v.bottomLeavesTip &&
+  v.bottomLeavesMid &&
+  v.bottomRoundTrip &&
   nDeep === 9 &&
   nTip === 3 &&
+  nBottom === 24 &&
   roundTrip < 0.05 &&
   u3 < 0.05 &&
   tip3 < 0.05 &&
+  bottom3 < 0.05 &&
   midDrift < 0.05 &&
   tipDrift < 0.05 &&
+  tipDriftFromBottom < 0.05 &&
+  midDriftFromBottom < 0.05 &&
+  bottomDriftFromTip < 0.05 &&
+  bottomDriftFromDeep < 0.05 &&
   tipIdx.length === 3 &&
   midIdx.length === 9 &&
+  bottomIdx.length === 24 &&
   tipSwipeOk &&
   tipSwipeLayer === 3 &&
   deepSwipeOk &&
+  bottomSwipeOk &&
+  bottomSwipeLayer === 24 &&
+  farSwipeBottom &&
   bTipOk &&
   bDeepOk &&
-  tipButtonsOk2;
+  tipButtonsOk2 &&
+  bottomButtonsOk;
 
 console.log({
   nDeep,
   nTip,
+  nBottom,
   roundTrip,
   u3,
   tip3,
+  bottom3,
   midDrift,
   tipDrift,
+  tipDriftFromBottom,
+  midDriftFromBottom,
+  bottomDriftFromTip,
+  bottomDriftFromDeep,
   midCount: midIdx.length,
   tipCount: tipIdx.length,
+  bottomCount: bottomIdx.length,
   tipSwipe,
   tipSwipeOk,
   tipSwipeLayer,
   deepSwipe,
   deepSwipeOk,
   deepSel: deepSel.length,
+  bottomSwipe,
+  bottomSwipeOk,
+  bottomSwipeLayer,
+  farSwipe,
+  farSwipeBottom,
   bTipSwipe,
   bTipOk,
   bMidSwipe,
   bDeepOk,
   tipButtons: tipButtons.length,
+  bottomButtons: bottomButtons.length,
 });
 console.log(pass ? 'PASS' : 'FAIL');
 process.exit(pass ? 0 : 1);

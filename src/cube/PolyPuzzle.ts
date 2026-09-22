@@ -215,7 +215,9 @@ export abstract class PolyPuzzle implements Puzzle {
   }
 
   protected notation(m: FaceTurnMove): string {
-    return `${m.tip ? m.face.toLowerCase() : m.face}${m.steps < 0 ? "'" : ''}`;
+    const face =
+      m.bottom ? `${m.face}w` : m.tip ? m.face.toLowerCase() : m.face;
+    return `${face}${m.steps < 0 ? "'" : ''}`;
   }
 
   getFaceButtons(): FaceButton[] {

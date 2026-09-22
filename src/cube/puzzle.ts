@@ -28,6 +28,8 @@ export interface FaceTurnMove {
   steps: number;
   /** Pyraminx tip-only turn when true. */
   tip?: boolean;
+  /** Pyraminx bottom / far-cap layer about the tip axis when true. */
+  bottom?: boolean;
 }
 
 export type AnyMove = LayerMove | FaceTurnMove;
@@ -42,6 +44,8 @@ export interface FaceButton {
   color: string;
   /** Optional tip button for pyraminx */
   tip?: boolean;
+  /** Optional bottom-layer button for pyraminx */
+  bottom?: boolean;
 }
 
 export interface Puzzle {
