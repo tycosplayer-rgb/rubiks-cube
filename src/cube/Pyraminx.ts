@@ -1,5 +1,5 @@
 import * as THREE from 'three';
-import { PolyPuzzle, type PolyTile } from './PolyPuzzle';
+import { PolyPuzzle, type PolyFace, type PolyTile } from './PolyPuzzle';
 import type { FaceButton, FaceTurnMove, VisualStyle } from './puzzle';
 
 const COLORS = [0xffd500, 0x009e60, 0xc41e3a, 0x0051ba];
@@ -146,6 +146,125 @@ export class Pyraminx extends PolyPuzzle {
         }
       }
     }
+  }
+
+  /**
+   * Swipe → tip-axis turn with tip vs deep (角层 / 棱层).
+   *
+   * Tip axis is resolved at hit time (not stale `turnFace`):
+   *   1. `mesh.userData.tipPiece >= 0` → that tip’s axis/id.
+   *   2. else if the hit projects `> TIP_THRESH` on some tip axis → that tip.
+   *   3. else among tips whose **deep** band currently contains the sticker
+   *      (`DEEP_THRESH < d ≤ TIP_THRESH`), pick the one whose ±120° screen
+   *      motion best matches the swipe (finger-follows). Always include
+   *      `resolveHitFace(point)` as a candidate.
+   *
+   * Tip vs deep: tip sticker **or** projection on the chosen tip `> TIP_THRESH`
+   * → `{ tip: true }` (角层); else deep / 棱层 (`tip` falsy).
+   * Direction: ±1 from screen-projected RH tangent about that tip (Y-flip).
+   *
+   * 底层: stickers near a downward tip / base often sit in more than one deep
+   * band. Choosing the tip by membership + swipe score (not only max point·axis)
+   * lets that bottom tip’s 角层 and 棱层 turn instead of always the upper mid-band.
+   */
+  dragToMove(
+    mesh: THREE.Mesh,
+    normal: THREE.Vector3,
+    delta: THREE.Vector2,
+    camera: THREE.Camera,
+    point: THREE.Vector3,
+  ): FaceTurnMove | null {
+    if (delta.lengthSq() < 1) return null;
+    this.group.updateMatrixWorld(true);
+
+    const tipPiece = Number(mesh.userData.tipPiece ?? -1);
+    const p0 = point.clone().project(camera);
+    const radial = new THREE.Vector3();
+    const tangent = new THREE.Vector3();
+    const p1 = new THREE.Vector3();
+
+    const scoreOnTip = (f: PolyFace): { steps: 1 | -1; score: number } | null => {
+      radial.copy(point).addScaledVector(f.axis, -point.dot(f.axis));
+      tangent.crossVectors(f.axis, radial);
+      if (tangent.lengthSq() < 1e-8) {
+        tangent.crossVectors(f.axis, camera.position.clone().sub(point));
+      }
+      if (tangent.lengthSq() < 1e-8) return null;
+      tangent.normalize();
+      let bestSteps: 1 | -1 = 1;
+      let bestScore = -Infinity;
+      for (const steps of [1, -1] as const) {
+        p1.copy(point).addScaledVector(tangent, steps).project(camera);
+        let sx = p1.x - p0.x;
+        let sy = -(p1.y - p0.y);
+        const slen = Math.hypot(sx, sy);
+        if (slen < 1e-10) continue;
+        sx /= slen;
+        sy /= slen;
+        const score = delta.x * sx + delta.y * sy;
+        if (score > bestScore) {
+          bestScore = score;
+          bestSteps = steps;
+        }
+      }
+      if (bestScore === -Infinity) return null;
+      return { steps: bestSteps, score: bestScore };
+    };
+
+    let chosen: PolyFace | null = null;
+
+    if (tipPiece >= 0 && tipPiece < this.faces.length) {
+      chosen = this.faces[tipPiece];
+    } else {
+      let tipByProj: PolyFace | null = null;
+      let tipDot = TIP_THRESH;
+      for (const f of this.faces) {
+        const d = point.dot(f.axis);
+        if (d > tipDot) {
+          tipDot = d;
+          tipByProj = f;
+        }
+      }
+      if (tipByProj) {
+        chosen = tipByProj;
+      } else {
+        const candidates: PolyFace[] = [];
+        for (const f of this.faces) {
+          const d = point.dot(f.axis);
+          if (d > DEEP_THRESH && d <= TIP_THRESH) candidates.push(f);
+        }
+        const resolved = this.resolveHitFace(point, normal);
+        if (resolved && !candidates.some((c) => c.id === resolved.id)) {
+          candidates.push(resolved);
+        }
+        if (!candidates.length) return null;
+
+        let bestScore = -Infinity;
+        for (const f of candidates) {
+          const r = scoreOnTip(f);
+          if (!r) continue;
+          if (r.score > bestScore) {
+            bestScore = r.score;
+            chosen = f;
+          }
+        }
+        if (!chosen) chosen = candidates[0];
+      }
+    }
+
+    if (!chosen) return null;
+    const scored = scoreOnTip(chosen);
+    if (!scored || scored.score < 1e-6) return null;
+
+    const proj = point.dot(chosen.axis);
+    const tip = tipPiece >= 0 || proj > TIP_THRESH;
+    if (mesh.userData) mesh.userData.turnFace = chosen.id;
+    return {
+      kind: 'face',
+      face: chosen.id,
+      steps: scored.steps,
+      ...(tip ? { tip: true } : {}),
+    };
   }
 
   protected selectLayer(move: FaceTurnMove): PolyTile[] {
