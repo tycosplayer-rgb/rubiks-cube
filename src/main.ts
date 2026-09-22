@@ -1,7 +1,7 @@
 import './style.css';
 import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
-import { RubiksCube } from './cube/RubiksCube';
+import { RubiksCube, type VisualStyle } from './cube/RubiksCube';
 import { setupInteraction, type ControlMode, type InteractionHandle } from './cube/controls';
 import { FACE_HEX } from './cube/colors';
 import { ensureSolver } from './cube/solver';
@@ -36,6 +36,10 @@ app.innerHTML = `
           <button type="button" class="mode-btn active" data-mode="smart" title="点色块拧层，空白转视角">智能</button>
           <button type="button" class="mode-btn" data-mode="orbit" title="只旋转视角">视角</button>
           <button type="button" class="mode-btn" data-mode="twist" title="只拧魔方层">拧动</button>
+        </div>
+        <div class="mode-toggle style-toggle" role="group" aria-label="外观样式">
+          <button type="button" class="style-btn active" data-style="sticker" title="圆角贴纸 + 黑色塑料边框">贴纸</button>
+          <button type="button" class="style-btn" data-style="full" title="整面纯色，无贴纸内嵌边框">全色</button>
         </div>
         <button id="btn-scramble" class="primary" type="button">打乱</button>
         <button id="btn-solve" class="success" type="button">自动还原</button>
@@ -148,7 +152,26 @@ scene.add(floor);
 controls.maxPolarAngle = Math.PI; // full orbit including underside
 controls.minPolarAngle = 0;
 
-let cube = new RubiksCube(3);
+const STYLE_STORAGE_KEY = 'rubiks-visual-style';
+function loadVisualStyle(): VisualStyle {
+  try {
+    const v = localStorage.getItem(STYLE_STORAGE_KEY);
+    if (v === 'sticker' || v === 'full') return v;
+  } catch {
+    /* private mode / blocked storage */
+  }
+  return 'sticker';
+}
+function saveVisualStyle(style: VisualStyle): void {
+  try {
+    localStorage.setItem(STYLE_STORAGE_KEY, style);
+  } catch {
+    /* ignore */
+  }
+}
+
+let visualStyle = loadVisualStyle();
+let cube = new RubiksCube(3, visualStyle);
 cube.setCastShadows(useShadows);
 scene.add(cube.group);
 fitCameraToOrder(3);
@@ -156,6 +179,24 @@ fitCameraToOrder(3);
 let interaction: InteractionHandle = setupInteraction(renderer.domElement, camera, cube, controls, 'smart');
 
 const modeBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.mode-btn'));
+const styleBtns = Array.from(document.querySelectorAll<HTMLButtonElement>('.style-btn'));
+function applyStyleUI(style: VisualStyle): void {
+  for (const btn of styleBtns) {
+    btn.classList.toggle('active', btn.dataset.style === style);
+  }
+}
+applyStyleUI(visualStyle);
+for (const btn of styleBtns) {
+  btn.addEventListener('click', () => {
+    const style = btn.dataset.style as VisualStyle;
+    if (style !== 'sticker' && style !== 'full') return;
+    visualStyle = style;
+    cube.setVisualStyle(style);
+    saveVisualStyle(style);
+    applyStyleUI(style);
+    statusEl.textContent = style === 'sticker' ? '外观：贴纸（圆角贴纸 + 黑边）' : '外观：全色（整面纯色）';
+  });
+}
 function applyModeUI(mode: ControlMode): void {
   for (const btn of modeBtns) {
     btn.classList.toggle('active', btn.dataset.mode === mode);
@@ -221,7 +262,7 @@ orderSel.addEventListener('change', () => {
   const prevMode = interaction.getMode();
   interaction.dispose();
   cube.stop();
-  cube = new RubiksCube(n);
+  cube = new RubiksCube(n, visualStyle);
   cube.setCastShadows(useShadows);
   scene.add(cube.group);
   bindCubeEvents();

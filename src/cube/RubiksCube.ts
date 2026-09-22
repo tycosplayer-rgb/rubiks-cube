@@ -11,6 +11,9 @@ const GAP = 0.06;
 const STICKER_INSET = 0.1;
 const STICKER_CORNER = 0.08;
 
+/** Sticker = inset rounded stickers + black rim; full = seamless solid face color. */
+export type VisualStyle = 'sticker' | 'full';
+
 export type CubeEvent =
   | { type: 'busy'; busy: boolean }
   | { type: 'move'; notation: string; historyLen: number }
@@ -70,9 +73,11 @@ export class RubiksCube {
   private _sharedEdges: THREE.EdgesGeometry | null = null;
   private _edgeMat: THREE.LineBasicMaterial | null = null;
   private _stickerBorderMap: THREE.CanvasTexture | null = null;
+  private visualStyle: VisualStyle = 'sticker';
 
-  constructor(order = 3) {
+  constructor(order = 3, style: VisualStyle = 'sticker') {
     this.order = order;
+    this.visualStyle = style;
     this.group.add(this.pivot);
     this.build();
   }
@@ -107,6 +112,57 @@ export class RubiksCube {
       c.mesh.castShadow = enabled;
       c.mesh.receiveShadow = enabled;
     }
+  }
+
+  getVisualStyle(): VisualStyle {
+    return this.visualStyle;
+  }
+
+  /**
+   * Swap sticker vs full-color materials on the live cube (no rebuild / no
+   * scramble reset). Plastic (internal) faces stay black either way.
+   */
+  setVisualStyle(style: VisualStyle): void {
+    if (style !== 'sticker' && style !== 'full') return;
+    if (style === this.visualStyle) return;
+    this.visualStyle = style;
+    this.applyVisualStyleToMaterials();
+  }
+
+  private applyVisualStyleToMaterials(): void {
+    for (const c of this.cubies) {
+      const mats = c.mesh.material as THREE.MeshStandardMaterial[];
+      for (const mat of mats) {
+        this.styleMaterial(mat);
+      }
+    }
+  }
+
+  /** Apply current visualStyle to a sticker or plastic material in place. */
+  private styleMaterial(mat: THREE.MeshStandardMaterial): void {
+    const isPlastic = mat.color.getHex() === FACE_COLORS.plastic;
+    if (isPlastic) {
+      mat.map = null;
+      mat.emissiveMap = null;
+      mat.emissive.setHex(0x000000);
+      mat.emissiveIntensity = 0;
+      mat.needsUpdate = true;
+      return;
+    }
+    if (this.visualStyle === 'sticker') {
+      const borderMap = this._stickerBorderMap;
+      mat.map = borderMap;
+      mat.emissive.copy(mat.color);
+      mat.emissiveIntensity = 0.22;
+      mat.emissiveMap = borderMap;
+    } else {
+      // Full-color tile: solid face color across the whole cubie face
+      mat.map = null;
+      mat.emissiveMap = null;
+      mat.emissive.copy(mat.color);
+      mat.emissiveIntensity = 0.22;
+    }
+    mat.needsUpdate = true;
   }
 
   /**
@@ -293,24 +349,24 @@ export class RubiksCube {
   }
 
   private createMaterials(ix: number, iy: number, iz: number, N: number): THREE.MeshStandardMaterial[] {
-    const borderMap = this._stickerBorderMap;
     const plastic = () =>
       new THREE.MeshStandardMaterial({
         color: FACE_COLORS.plastic,
         roughness: 0.55,
         metalness: 0.05,
       });
-    const sticker = (face: FaceId) =>
-      new THREE.MeshStandardMaterial({
+    const sticker = (face: FaceId) => {
+      const mat = new THREE.MeshStandardMaterial({
         color: FACE_COLORS[face],
-        map: borderMap,
         roughness: 0.45,
         metalness: 0.06,
         // Keep face color readable from any orbit angle (esp. underside)
         emissive: FACE_COLORS[face],
         emissiveIntensity: 0.22,
-        emissiveMap: borderMap ?? undefined,
       });
+      this.styleMaterial(mat);
+      return mat;
+    };
 
     // BoxGeometry: +X -X +Y -Y +Z -Z
     return [

@@ -262,11 +262,42 @@ button.ghost {
   background: linear-gradient(180deg, #3d6ef0, #2a4fbf);
 }
 
+.style-btn {
+  appearance: none;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  color: var(--muted);
+  padding: 8px 10px;
+  font-size: 0.85rem;
+  font-weight: 600;
+  cursor: pointer;
+  box-shadow: none;
+  transform: none;
+}
+
+.style-btn + .style-btn {
+  border-left: 1px solid var(--border);
+}
+
+.style-btn:hover:not(:disabled) {
+  border-color: transparent;
+  transform: none;
+  color: var(--text);
+  background: rgba(91, 140, 255, 0.12);
+}
+
+.style-btn.active {
+  color: var(--text);
+  background: linear-gradient(180deg, #3d6ef0, #2a4fbf);
+}
+
 @media (max-width: 640px) {
   .mode-toggle {
     width: 100%;
   }
-  .mode-btn {
+  .mode-btn,
+  .style-btn {
     flex: 1;
     padding: 10px 8px;
   }
