@@ -32,6 +32,8 @@ export abstract class PolyPuzzle implements Puzzle {
   protected tiles: PolyTile[] = [];
   protected faces: PolyFace[] = [];
   protected core: THREE.Mesh | null = null;
+  /** Rest pose of core (group-local); restored on reset after turn-bakes. */
+  private readonly coreInitialMatrix = new THREE.Matrix4();
   protected history: FaceTurnMove[] = [];
   protected listeners: Array<(e: PuzzleEvent) => void> = [];
   protected speed = 1;
@@ -82,6 +84,8 @@ export abstract class PolyPuzzle implements Puzzle {
     if (this.core) {
       this.core.castShadow = this.castShadows;
       this.core.receiveShadow = this.castShadows;
+      this.core.updateMatrix();
+      this.coreInitialMatrix.copy(this.core.matrix);
     }
     this.applyStyle();
   }
@@ -124,10 +128,33 @@ export abstract class PolyPuzzle implements Puzzle {
   }
 
 
-  /** Pull core inward while a layer spins so shear gaps do not flash black. */
+  /**
+   * While a layer turns, parent the gray core into the pivot so it rotates with
+   * the layer (no shrink / no poke-through). When the turn ends, bake the core
+   * back onto the group preserving world orientation — successive turns accumulate.
+   */
   protected setCoreTurnSafe(animating: boolean): void {
     if (!this.core) return;
-    this.core.scale.setScalar(animating ? 0.90 : 1);
+    if (animating) {
+      if (this.core.parent !== this.pivot) this.reparentCore(this.pivot);
+    } else if (this.core.parent !== this.group) {
+      this.reparentCore(this.group);
+    }
+  }
+
+  /** Reparent core preserving world pose; force unit scale (unlike facelet styleScale). */
+  protected reparentCore(newParent: THREE.Object3D): void {
+    if (!this.core) return;
+    this.core.updateWorldMatrix(true, false);
+    newParent.updateWorldMatrix(true, false);
+    this._world.copy(this.core.matrixWorld);
+    if (this.core.parent !== newParent) newParent.add(this.core);
+    this._local.copy(newParent.matrixWorld).invert().multiply(this._world);
+    this._local.decompose(this._pos, this._quat, this._scl);
+    this.core.position.copy(this._pos);
+    this.core.quaternion.copy(this._quat);
+    this.core.scale.set(1, 1, 1);
+    this.core.updateMatrix();
   }
 
   setVisualStyle(style: VisualStyle): void {
@@ -163,13 +190,14 @@ export abstract class PolyPuzzle implements Puzzle {
     this.pivot.setRotationFromAxisAngle(this.faceOf(a.move.face).axis, a.target);
     this.group.updateMatrixWorld(true);
     for (const tile of a.selected) this.reparentUniform(tile.mesh, this.group);
+    // Bake core while pivot still holds the final turn angle, then clear pivot.
+    this.setCoreTurnSafe(false);
     this.pivot.rotation.set(0, 0, 0);
     this.pivot.scale.set(1, 1, 1);
     if (a.record) {
       this.history.push({ ...a.move });
       this.emit({ type: 'move', notation: this.notation(a.move), historyLen: this.history.length });
     }
-    this.setCoreTurnSafe(false);
     this.turnAnim = null;
     this.busy = false;
     if (!this.locked) this.emit({ type: 'busy', busy: false });
@@ -269,9 +297,9 @@ export abstract class PolyPuzzle implements Puzzle {
       this.pivot.setRotationFromAxisAngle(state.axis, target);
       this.group.updateMatrixWorld(true);
       for (const tile of state.selected) this.reparentUniform(tile.mesh, this.group);
+      this.setCoreTurnSafe(false);
       this.pivot.rotation.set(0, 0, 0);
       this.pivot.scale.set(1, 1, 1);
-      this.setCoreTurnSafe(false);
       if (commitSteps !== 0) {
         this.history.push({ ...move });
         this.emit({ type: 'move', notation: this.notation(move), historyLen: this.history.length });
@@ -279,6 +307,8 @@ export abstract class PolyPuzzle implements Puzzle {
       if (!this.locked) this.emit({ type: 'busy', busy: false });
       return Promise.resolve();
     }
+    // Keep core parented to pivot (from beginInteractiveTurn) until update()
+    // bakes it back onto the group — do not detach early during the snap.
     this.busy = true;
     return new Promise<void>((resolve) => {
       this.turnAnim = {
@@ -412,6 +442,12 @@ export abstract class PolyPuzzle implements Puzzle {
   reset(): void {
     if (this.isBusy()) return;
     this.setCoreTurnSafe(false);
+    if (this.core) {
+      this.core.matrix.copy(this.coreInitialMatrix);
+      this.core.matrix.decompose(this.core.position, this.core.quaternion, this.core.scale);
+      this.core.scale.set(1, 1, 1);
+      this.core.updateMatrix();
+    }
     for (const tile of this.tiles) {
       if (tile.mesh.parent !== this.group) this.group.add(tile.mesh);
       tile.mesh.matrix.copy(tile.initialMatrix);
