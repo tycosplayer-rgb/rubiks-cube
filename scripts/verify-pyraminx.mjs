@@ -17,7 +17,7 @@ import * as THREE from 'three';
 const TIP_THRESH = 1.5;
 const DEEP_THRESH = 0.4;
 
-const p = new Pyraminx('sticker');
+const p = new Pyraminx(3, 'sticker');
 const v = p.debugVerifyLayers();
 console.log('layers', v);
 
@@ -577,6 +577,59 @@ const faceIds = new Set(faces.map((f) => f.id));
 const tipButtonsOk2 = tipButtons.length === 4 && tipButtons.every((b) => faceIds.has(b.id));
 const bottomButtonsOk = bottomButtons.length === 4 && bottomButtons.every((b) => faceIds.has(b.id));
 
+
+// --- Order smoke: N=2 and N=7 ---
+function smokeOrder(N) {
+  const q = new Pyraminx(N, 'sticker');
+  const vv = q.debugVerifyLayers();
+  const tipN = q['selectLayer']({ kind: 'face', face: 'U', steps: 1, tip: true, depth: 0 }).length;
+  const botN = q['selectLayer']({ kind: 'face', face: 'U', steps: 1, bottom: true, depth: N - 1 }).length;
+  // Tip must not move farthest band
+  const axis = q['faces'][0].axis;
+  q.group.updateMatrixWorld(true);
+  const botTiles = q['selectLayer']({ kind: 'face', face: 'U', steps: 1, bottom: true, depth: N - 1 });
+  const before = botTiles.map((t) => {
+    const c = new THREE.Vector3();
+    const attr = t.mesh.geometry.getAttribute('position');
+    for (let i = 0; i < attr.count; i++) c.add(new THREE.Vector3().fromBufferAttribute(attr, i));
+    return c.multiplyScalar(1 / attr.count).applyMatrix4(t.mesh.matrixWorld);
+  });
+  // apply tip instant
+  {
+    const move = { kind: 'face', face: 'U', steps: 1, tip: true, depth: 0 };
+    const selected = q['selectLayer'](move);
+    const pivot = q['pivot'];
+    pivot.rotation.set(0, 0, 0);
+    for (const tile of selected) reparent(tile.mesh, pivot);
+    pivot.setRotationFromAxisAngle(axis, q['turnAngle'](move));
+    q.group.updateMatrixWorld(true);
+    for (const tile of selected) reparent(tile.mesh, q.group);
+    pivot.rotation.set(0, 0, 0);
+  }
+  q.group.updateMatrixWorld(true);
+  const after = botTiles.map((t) => {
+    const c = new THREE.Vector3();
+    const attr = t.mesh.geometry.getAttribute('position');
+    for (let i = 0; i < attr.count; i++) c.add(new THREE.Vector3().fromBufferAttribute(attr, i));
+    return c.multiplyScalar(1 / attr.count).applyMatrix4(t.mesh.matrixWorld);
+  });
+  let drift = 0;
+  for (let i = 0; i < before.length; i++) drift = Math.max(drift, before[i].distanceTo(after[i]));
+  const ok =
+    vv.order === N &&
+    vv.bandCounts.length === N &&
+    vv.bandCounts.every((c) => c > 0) &&
+    tipN > 0 &&
+    botN > 0 &&
+    tipN === 3 &&
+    drift < 0.05 &&
+    q.getFaceButtons().length === N * 4;
+  console.log('smokeOrder', N, { bands: vv.bandCounts, tipN, botN, drift, ok });
+  return ok;
+}
+const smoke2 = smokeOrder(2);
+const smoke7 = smokeOrder(7);
+
 const pass =
   v.tipCount === 3 &&
   v.deepCount === 9 &&
@@ -619,7 +672,9 @@ const pass =
   tipButtonsOk2 &&
   bottomButtonsOk &&
   continuousOk &&
-  coreSegmentOk;
+  coreSegmentOk &&
+  smoke2 &&
+  smoke7;
 
 console.log({
   nDeep,

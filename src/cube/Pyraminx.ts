@@ -12,25 +12,15 @@ const COLORS = [0xffd500, 0x009e60, 0xc41e3a, 0x0051ba];
 const CSS = ['#FFD500', '#009E60', '#C41E3A', '#0051BA'];
 const IDS = ['U', 'L', 'R', 'B'];
 
-/**
- * Facelet projections along a tip axis (solved, |vertex|=2.7) cluster at:
- *   ~1.92 tip (3) · ~1.12 axial wedges (3) · ~0.72 edge band (6)
- *   · ~-0.08 / ~-0.48 / ~-0.96 far / base (incl. other tips at d ≈ -1/3)
- * Tip / 尖 = tip only (3): d > TIP_THRESH.
- * Deep / 层 = mid-band excluding tip (9): DEEP_THRESH < d ≤ TIP_THRESH.
- * Bottom / 底 = far band + 底座三角 (24): d ≤ DEEP_THRESH.
- *   Includes the three other tips' tip stickers (base corners when T is up);
- *   tip T's own stickers stay out (d_T ≈ 1.92). Bottom about T cycles those
- *   three base corners. Tip and deep stay independent; tip swipe uses world pos.
- */
-const TIP_THRESH = 1.5;
-const DEEP_THRESH = 0.4;
 /** Geometry inset for grooves between facelets. */
 const STICKER_SHRINK = 0.99;
 /** Push facelets outward along face normals so spinning layers clear the core. */
 const FACELET_OUTSET = 0.065;
 /** Core circumradius — recessed so mid-turn shear gaps do not flash black. */
 const CORE_RADIUS = 2.15;
+/** Classic N=3 tip / deep cuts (must stay exact for verify + feel). */
+const N3_TIP_THRESH = 1.5;
+const N3_DEEP_THRESH = 0.4;
 
 interface PyraTile extends PolyTile {
   /** Tip index this facelet belongs to as a trivial tip sticker, or -1. */
@@ -39,9 +29,20 @@ interface PyraTile extends PolyTile {
   faceIndex: number;
 }
 
-/** 3-layer Pyraminx: turns about the four tip (vertex) axes, 120° each. */
+/**
+ * NxN Pyraminx (orders 2–7): turns about the four tip (vertex) axes, 120° each.
+ * Depth bands along each tip axis: 0 = tip … order-1 = bottom.
+ * N=3 preserves classic tip / 层 / 底 thresholds and labels.
+ */
 export class Pyraminx extends PolyPuzzle {
   readonly puzzleType = 'pyraminx' as const;
+  private readonly order: number;
+  /** Cuts between depth bands, high→low. Length = order-1.
+   *  depth 0: d > thresh[0]
+   *  depth k: thresh[k] < d ≤ thresh[k-1]
+   *  depth N-1: d ≤ thresh[N-2]
+   */
+  private depthThresh: number[] = [];
   private readonly scratch = new THREE.Vector3();
   private readonly pyraTiles: PyraTile[] = [];
   /** Geometric 1:1 angle tracking for continuous layer drag. */
@@ -56,10 +57,58 @@ export class Pyraminx extends PolyPuzzle {
     ndc: THREE.Vector2;
   } | null = null;
 
-  constructor(style: VisualStyle = 'sticker') {
-    super(style);
+  constructor(orderOrStyle: number | VisualStyle = 3, style: VisualStyle = 'sticker') {
+    const order = typeof orderOrStyle === 'number' ? orderOrStyle : 3;
+    const st = typeof orderOrStyle === 'number' ? style : orderOrStyle;
+    super(st);
+    this.order = THREE.MathUtils.clamp(Math.round(order), 2, 7);
     this.build();
     this.finishBuild();
+    this.computeDepthThresholds();
+  }
+
+  getOrder(): number {
+    return this.order;
+  }
+
+  /** Tip cut (depth 0 lower bound). */
+  private tipThresh(): number {
+    return this.depthThresh[0] ?? N3_TIP_THRESH;
+  }
+
+  /** Bottom cut (depth N-1 upper bound). */
+  private bottomThresh(): number {
+    return this.depthThresh[this.depthThresh.length - 1] ?? N3_DEEP_THRESH;
+  }
+
+  /**
+   * Resolve move flags → depth index 0..order-1.
+   * tip→0, bottom→N-1, bare (N≥3)→1 (classic deep), else depth field.
+   */
+  private resolveDepth(move: FaceTurnMove): number {
+    if (move.depth !== undefined) {
+      return THREE.MathUtils.clamp(Math.round(move.depth), 0, this.order - 1);
+    }
+    if (move.tip) return 0;
+    if (move.bottom) return this.order - 1;
+    // Classic deep mid-band for N=3; for N=2 default tip; else first mid shell.
+    if (this.order <= 2) return 0;
+    return 1;
+  }
+
+  /** Band membership: depth k contains projection d. */
+  private depthOfProjection(d: number): number {
+    const t = this.depthThresh;
+    if (!t.length) return 0;
+    if (d > t[0]) return 0;
+    for (let k = 1; k < t.length; k++) {
+      if (d > t[k]) return k;
+    }
+    return this.order - 1;
+  }
+
+  private inDepth(d: number, depth: number): boolean {
+    return this.depthOfProjection(d) === depth;
   }
 
   private build(): void {
@@ -79,9 +128,9 @@ export class Pyraminx extends PolyPuzzle {
       colorCss: CSS[i],
     }));
 
-    // Segmented soft-gray core (tip / mid / bottom bands per tip axis).
     this.buildSegmentedCore(vertices);
 
+    const n = this.order;
     for (let faceIndex = 0; faceIndex < 4; faceIndex++) {
       // Face opposite tip `faceIndex` — colored by that face's color (same index).
       const fv = vertices.filter((_, i) => i !== faceIndex);
@@ -96,7 +145,6 @@ export class Pyraminx extends PolyPuzzle {
         normal.negate();
       }
       const off = normal.clone().multiplyScalar(FACELET_OUTSET);
-      const n = 3;
       const p = (i: number, j: number) =>
         a
           .clone()
@@ -111,7 +159,6 @@ export class Pyraminx extends PolyPuzzle {
         geo.setIndex([0, 1, 2]);
         geo.computeVertexNormals();
 
-        // Drag / gesture: nearest tip axis (tip-centric, not face-normal).
         let nearest = 0;
         let best = -Infinity;
         for (let k = 0; k < 4; k++) {
@@ -122,14 +169,12 @@ export class Pyraminx extends PolyPuzzle {
           }
         }
 
-        // Color by the triangular face this sticker sits on (not by nearest tip).
         this.addTile(geo, COLORS[faceIndex], IDS[nearest]);
         const tile = this.tiles[this.tiles.length - 1] as PyraTile;
         tile.tipPiece = tipPiece;
         tile.faceIndex = faceIndex;
         tile.mesh.userData.tipPiece = tipPiece;
         tile.mesh.userData.faceIndex = faceIndex;
-        // Pull stickers in front of the core; avoids z-fight / black flash.
         tile.mesh.material.polygonOffset = true;
         tile.mesh.material.polygonOffsetFactor = -4;
         tile.mesh.material.polygonOffsetUnits = -4;
@@ -147,7 +192,7 @@ export class Pyraminx extends PolyPuzzle {
           addTri(p(i, j), p(i + 1, j), p(i, j + 1), tipPiece);
         }
       }
-      // Down-pointing fillers (edge/axial band) — not tip stickers.
+      // Down-pointing fillers — not tip stickers.
       for (let i = 0; i < n - 1; i++) {
         for (let j = 0; j < n - 1 - i; j++) {
           addTri(p(i + 1, j), p(i + 1, j + 1), p(i, j + 1), -1);
@@ -157,27 +202,94 @@ export class Pyraminx extends PolyPuzzle {
   }
 
   /**
-   * Lock tip / deep / bottom band + tip axis from a hit (no screen delta needed).
-   * Same rules as dragToMove layer detection; world tip resolve; no swipe scoring.
+   * Build depthThresh from solved-state tip-0 projections.
+   * Cluster pattern: tip=1 cluster, each mid shell=2 clusters, bottom=rest.
+   * N=3 hardcodes classic 1.5 / 0.4 cuts.
+   */
+  private computeDepthThresholds(): void {
+    if (this.order === 3) {
+      this.depthThresh = [N3_TIP_THRESH, N3_DEEP_THRESH];
+      return;
+    }
+    this.group.updateMatrixWorld(true);
+    const axis = this.faces[0].axis;
+    const projs = this.tiles
+      .map((t) => this.tileWorldCenter(t, this.scratch).dot(axis))
+      .sort((a, b) => b - a);
+
+    type Cluster = { mean: number; vals: number[] };
+    const clusters: Cluster[] = [];
+    const GAP = 0.12;
+    for (const p of projs) {
+      const last = clusters[clusters.length - 1];
+      if (!last || last.mean - p > GAP) {
+        clusters.push({ mean: p, vals: [p] });
+      } else {
+        last.vals.push(p);
+        last.mean = last.vals.reduce((s, x) => s + x, 0) / last.vals.length;
+      }
+    }
+
+    // Assign clusters → depth bands.
+    const bandClusters: number[][] = Array.from({ length: this.order }, () => []);
+    if (!clusters.length) {
+      this.depthThresh = Array.from({ length: this.order - 1 }, (_, i) => 1.5 - i * 0.7);
+      return;
+    }
+    bandClusters[0].push(0);
+    let idx = 1;
+    for (let d = 1; d < this.order - 1; d++) {
+      // Two clusters per mid shell when available.
+      for (let take = 0; take < 2 && idx < clusters.length - 1; take++) {
+        bandClusters[d].push(idx++);
+      }
+      if (!bandClusters[d].length && idx < clusters.length - 1) {
+        bandClusters[d].push(idx++);
+      }
+    }
+    while (idx < clusters.length) bandClusters[this.order - 1].push(idx++);
+    // Ensure every band has at least a placeholder from neighbors if empty.
+    for (let d = 1; d < this.order; d++) {
+      if (!bandClusters[d].length) {
+        const prev = bandClusters[d - 1];
+        bandClusters[d].push(prev[prev.length - 1]);
+      }
+    }
+
+    const thresh: number[] = [];
+    for (let k = 0; k < this.order - 1; k++) {
+      const hiBand = bandClusters[k];
+      const loBand = bandClusters[k + 1];
+      const hiMin = Math.min(...hiBand.map((i) => Math.min(...clusters[i].vals)));
+      const loMax = Math.max(...loBand.map((i) => Math.max(...clusters[i].vals)));
+      thresh.push((hiMin + loMax) / 2);
+    }
+    this.depthThresh = thresh;
+  }
+
+  /**
+   * Lock depth band + tip axis from a hit (no screen delta needed).
+   * World tip resolve for depth 0; opposite-face / far-band → bottom; else mid band.
    */
   resolveLayerAtHit(
     mesh: THREE.Mesh,
     point: THREE.Vector3,
     normal: THREE.Vector3,
     camera: THREE.Camera,
-  ): { face: string; tip?: boolean; bottom?: boolean } | null {
+  ): { face: string; tip?: boolean; bottom?: boolean; depth: number } | null {
     this.group.updateMatrixWorld(true);
 
     const tipPiece = Number(mesh.userData.tipPiece ?? -1);
     const faceIndex = Number(mesh.userData.faceIndex ?? -1);
     const camPos = camera.position;
+    const tipCut = this.tipThresh();
+    const botCut = this.bottomThresh();
 
-    type Mode = 'tip' | 'deep' | 'bottom';
     let chosen: PolyFace | null = null;
-    let mode: Mode = 'deep';
+    let depth = Math.min(1, this.order - 1);
 
     let tipByPos: PolyFace | null = null;
-    let tipDot = TIP_THRESH;
+    let tipDot = tipCut;
     for (const f of this.faces) {
       const d = point.dot(f.axis);
       if (d > tipDot) {
@@ -188,7 +300,7 @@ export class Pyraminx extends PolyPuzzle {
     if (tipByPos) {
       if (tipPiece >= 0 && tipPiece < this.faces.length) {
         const hinted = this.faces[tipPiece];
-        if (hinted.id === tipByPos.id && point.dot(hinted.axis) > TIP_THRESH) {
+        if (hinted.id === tipByPos.id && point.dot(hinted.axis) > tipCut) {
           chosen = hinted;
         } else {
           chosen = tipByPos;
@@ -196,8 +308,9 @@ export class Pyraminx extends PolyPuzzle {
       } else {
         chosen = tipByPos;
       }
-      mode = 'tip';
+      depth = 0;
     } else {
+      // Opposite-face non-tip, viewed from outside → bottom about that tip.
       if (faceIndex >= 0 && faceIndex < this.faces.length) {
         const opp = this.faces[faceIndex];
         const align = camPos.dot(opp.axis);
@@ -208,7 +321,7 @@ export class Pyraminx extends PolyPuzzle {
           );
         if (viewingOpp) {
           chosen = opp;
-          mode = 'bottom';
+          depth = this.order - 1;
         }
       }
 
@@ -226,9 +339,9 @@ export class Pyraminx extends PolyPuzzle {
             unique = false;
           }
         }
-        if (up && unique && point.dot(up.axis) <= DEEP_THRESH) {
+        if (up && unique && point.dot(up.axis) <= botCut) {
           chosen = up;
-          mode = 'bottom';
+          depth = this.order - 1;
         }
       }
 
@@ -236,14 +349,22 @@ export class Pyraminx extends PolyPuzzle {
         const candidates: PolyFace[] = [];
         for (const f of this.faces) {
           const d = point.dot(f.axis);
-          if (d > DEEP_THRESH && d <= TIP_THRESH) candidates.push(f);
+          const band = this.depthOfProjection(d);
+          if (band > 0 && band < this.order - 1) candidates.push(f);
+          else if (this.order === 2 && band === 0) candidates.push(f);
         }
         const resolved = this.resolveHitFace(point, normal);
         if (resolved && !candidates.some((c) => c.id === resolved.id)) {
           candidates.push(resolved);
         }
+        if (!candidates.length) {
+          // Fallback: any face with a defined mid/non-tip band at hit.
+          for (const f of this.faces) {
+            const band = this.depthOfProjection(point.dot(f.axis));
+            if (band !== 0) candidates.push(f);
+          }
+        }
         if (!candidates.length) return null;
-        // Prefer resolved face if mid-band; else highest projection.
         if (resolved && candidates.some((c) => c.id === resolved.id)) {
           chosen = resolved;
         } else {
@@ -257,15 +378,26 @@ export class Pyraminx extends PolyPuzzle {
             }
           }
         }
-        mode = 'deep';
+        depth = this.depthOfProjection(point.dot(chosen.axis));
+        if (depth === 0) depth = Math.min(1, this.order - 1);
       }
     }
 
     if (!chosen) return null;
     if (mesh.userData) mesh.userData.turnFace = chosen.id;
+    return this.packLayer(chosen.id, depth);
+  }
+
+  private packLayer(
+    face: string,
+    depth: number,
+  ): { face: string; tip?: boolean; bottom?: boolean; depth: number } {
+    const d = THREE.MathUtils.clamp(depth, 0, this.order - 1);
     return {
-      face: chosen.id,
-      ...(mode === 'tip' ? { tip: true } : mode === 'bottom' ? { bottom: true } : {}),
+      face,
+      depth: d,
+      ...(d === 0 ? { tip: true } : {}),
+      ...(d === this.order - 1 ? { bottom: true } : {}),
     };
   }
 
@@ -276,13 +408,11 @@ export class Pyraminx extends PolyPuzzle {
     if (!this.beginInteractiveTurn(layer)) return null;
 
     const axis = this.faceOf(layer.face).axis.clone();
-    // Orthonormal basis in plane ⊥ tip axis; u along lever arm at hit.
     const radial = pick.point.clone().addScaledVector(axis, -pick.point.dot(axis));
     const u = new THREE.Vector3();
     if (radial.lengthSq() > 1e-8) {
       u.copy(radial).normalize();
     } else {
-      // Hit near axis: fall back using camera-facing direction in the plane.
       const view = camera.position.clone().sub(pick.point);
       u.crossVectors(axis, view);
       if (u.lengthSq() < 1e-8) u.set(1, 0, 0).cross(axis);
@@ -294,6 +424,7 @@ export class Pyraminx extends PolyPuzzle {
 
     const session: LayerDragSession = {
       face: layer.face,
+      depth: layer.depth,
       ...(layer.tip ? { tip: true } : {}),
       ...(layer.bottom ? { bottom: true } : {}),
     };
@@ -322,7 +453,6 @@ export class Pyraminx extends PolyPuzzle {
     g.ndc.set(ndcX, ndcY);
     g.raycaster.setFromCamera(g.ndc, camera);
     const ray = g.raycaster.ray;
-    // Plane through origin with normal = tip axis (axes pass through origin).
     const denom = ray.direction.dot(g.axis);
     if (Math.abs(denom) < 1e-10) return;
     const t = -ray.origin.dot(g.axis) / denom;
@@ -346,7 +476,6 @@ export class Pyraminx extends PolyPuzzle {
       this.layerDragGeom = null;
       return;
     }
-    // Prefer live interactive angle (geom.angle tracks the same value during pointer moves).
     const angle = this.getInteractiveAngle();
     this.layerDragGeom = null;
 
@@ -371,20 +500,9 @@ export class Pyraminx extends PolyPuzzle {
     this.cancelInteractiveTurn();
   }
 
-    /**
-   * Swipe → tip-axis turn with tip / deep / bottom (尖 / 层 / 底).
-   *
-   *   1. Tip under finger by **current world position** (authoritative):
-   *      argmax point·face.axis among faces with d > TIP_THRESH → `{ tip: true }`.
-   *      `tipPiece` is only a weak hint when it still projects > TIP_THRESH on
-   *      that same tip; never follow stale tipPiece to a tip the sticker left.
-   *   2. else if hit is on the face opposite tip T (`faceIndex === T`) and
-   *      the camera is outside that face → `{ bottom: true }` about T
-   *   3. else if hit is in the far band of the camera-up tip
-   *      (`d ≤ DEEP_THRESH` on the tip nearest the camera) → bottom about that tip
-   *   4. else deep mid-band candidates (`DEEP_THRESH < d ≤ TIP_THRESH`), swipe-scored
-   *
-   * Direction: ±1 from screen-projected RH tangent (Y-flip).
+  /**
+   * Swipe → tip-axis turn with depth band (尖 / 层… / 底).
+   * Same tip / opposite / far-band / mid rules as resolveLayerAtHit, plus swipe scoring.
    */
   dragToMove(
     mesh: THREE.Mesh,
@@ -403,6 +521,8 @@ export class Pyraminx extends PolyPuzzle {
     const tangent = new THREE.Vector3();
     const p1 = new THREE.Vector3();
     const camPos = camera.position;
+    const tipCut = this.tipThresh();
+    const botCut = this.bottomThresh();
 
     const scoreOnTip = (f: PolyFace): { steps: 1 | -1; score: number } | null => {
       radial.copy(point).addScaledVector(f.axis, -point.dot(f.axis));
@@ -432,13 +552,11 @@ export class Pyraminx extends PolyPuzzle {
       return { steps: bestSteps, score: bestScore };
     };
 
-    type Mode = 'tip' | 'deep' | 'bottom';
     let chosen: PolyFace | null = null;
-    let mode: Mode = 'deep';
+    let depth = Math.min(1, this.order - 1);
 
-    // Tip identity at swipe time: current world position, not stale tipPiece.
     let tipByPos: PolyFace | null = null;
-    let tipDot = TIP_THRESH;
+    let tipDot = tipCut;
     for (const f of this.faces) {
       const d = point.dot(f.axis);
       if (d > tipDot) {
@@ -447,10 +565,9 @@ export class Pyraminx extends PolyPuzzle {
       }
     }
     if (tipByPos) {
-      // tipPiece is a weak hint only when it still sits on this same tip.
       if (tipPiece >= 0 && tipPiece < this.faces.length) {
         const hinted = this.faces[tipPiece];
-        if (hinted.id === tipByPos.id && point.dot(hinted.axis) > TIP_THRESH) {
+        if (hinted.id === tipByPos.id && point.dot(hinted.axis) > tipCut) {
           chosen = hinted;
         } else {
           chosen = tipByPos;
@@ -458,10 +575,8 @@ export class Pyraminx extends PolyPuzzle {
       } else {
         chosen = tipByPos;
       }
-      mode = 'tip';
+      depth = 0;
     } else {
-      // Opposite-face non-tip, viewed from outside that face → bottom.
-      // (Do not trust tipPiece here — sticker is not on any tip vertex.)
       if (faceIndex >= 0 && faceIndex < this.faces.length) {
         const opp = this.faces[faceIndex];
         const align = camPos.dot(opp.axis);
@@ -472,11 +587,10 @@ export class Pyraminx extends PolyPuzzle {
           );
         if (viewingOpp) {
           chosen = opp;
-          mode = 'bottom';
+          depth = this.order - 1;
         }
       }
 
-      // Far band of the unique camera-up tip → bottom about that tip.
       if (!chosen) {
         let up: PolyFace | null = null;
         let upDot = -Infinity;
@@ -491,18 +605,18 @@ export class Pyraminx extends PolyPuzzle {
             unique = false;
           }
         }
-        if (up && unique && point.dot(up.axis) <= DEEP_THRESH) {
+        if (up && unique && point.dot(up.axis) <= botCut) {
           chosen = up;
-          mode = 'bottom';
+          depth = this.order - 1;
         }
       }
 
-      // Deep mid-band (and resolveHitFace), swipe-scored.
       if (!chosen) {
         const candidates: PolyFace[] = [];
         for (const f of this.faces) {
           const d = point.dot(f.axis);
-          if (d > DEEP_THRESH && d <= TIP_THRESH) candidates.push(f);
+          const band = this.depthOfProjection(d);
+          if (band > 0 && band < this.order - 1) candidates.push(f);
         }
         const resolved = this.resolveHitFace(point, normal);
         if (resolved && !candidates.some((c) => c.id === resolved.id)) {
@@ -520,7 +634,8 @@ export class Pyraminx extends PolyPuzzle {
           }
         }
         if (!chosen) chosen = candidates[0];
-        mode = 'deep';
+        depth = this.depthOfProjection(point.dot(chosen.axis));
+        if (depth === 0) depth = Math.min(1, this.order - 1);
       }
     }
 
@@ -529,18 +644,20 @@ export class Pyraminx extends PolyPuzzle {
     if (!scored || scored.score < 1e-6) return null;
 
     if (mesh.userData) mesh.userData.turnFace = chosen.id;
+    const packed = this.packLayer(chosen.id, depth);
     return {
       kind: 'face',
-      face: chosen.id,
+      face: packed.face,
       steps: scored.steps,
-      ...(mode === 'tip' ? { tip: true } : mode === 'bottom' ? { bottom: true } : {}),
+      depth: packed.depth,
+      ...(packed.tip ? { tip: true } : {}),
+      ...(packed.bottom ? { bottom: true } : {}),
     };
   }
 
   /**
    * Subdivide the recessed tetrahedron into small tetras, tagged by band along
-   * each tip axis (same TIP_THRESH / DEEP_THRESH as facelets). Idle pose looks
-   * like one continuous gray plastic; turns only reparent the active band.
+   * each tip axis (same thresholds as facelets).
    */
   private buildSegmentedCore(tipVertices: THREE.Vector3[]): void {
     const V = tipVertices.map((v) => v.clone().normalize().multiplyScalar(CORE_RADIUS));
@@ -554,7 +671,6 @@ export class Pyraminx extends PolyPuzzle {
       const bc = mid(b, c);
       const bd = mid(b, d);
       const cd = mid(c, d);
-      // 4 corner tetras + 4 from octahedron split along diagonal ab–cd.
       return [
         [a, ab, ac, ad],
         [b, ab, bc, bd],
@@ -568,8 +684,9 @@ export class Pyraminx extends PolyPuzzle {
     };
 
     let tets: Tet[] = [[V[0], V[1], V[2], V[3]]];
-    // 3 levels → 512 small tetras; tip band (vol ≈ 1%) gets several pieces each.
-    for (let level = 0; level < 3; level++) tets = tets.flatMap(subdivide);
+    // Finer core for higher N so tip bands still get several pieces.
+    const levels = this.order <= 3 ? 3 : this.order <= 5 ? 4 : 4;
+    for (let level = 0; level < levels; level++) tets = tets.flatMap(subdivide);
 
     const material = new THREE.MeshStandardMaterial({
       color: 0x8b929c,
@@ -615,7 +732,6 @@ export class Pyraminx extends PolyPuzzle {
   private coreWorldCenter(mesh: THREE.Mesh, target = new THREE.Vector3()): THREE.Vector3 {
     const local = mesh.userData.coreCentroidLocal as THREE.Vector3 | undefined;
     if (local) return target.copy(local).applyMatrix4(mesh.matrixWorld);
-    // Fallback: average geometry positions.
     const attr = mesh.geometry.getAttribute('position');
     target.set(0, 0, 0);
     for (let i = 0; i < attr.count; i++) {
@@ -624,54 +740,23 @@ export class Pyraminx extends PolyPuzzle {
     return target.multiplyScalar(1 / Math.max(1, attr.count)).applyMatrix4(mesh.matrixWorld);
   }
 
-  /**
-   * Core bands match facelet thresholds on the tip axis (world centroids):
-   *   tip    d > TIP_THRESH
-   *   deep   DEEP_THRESH < d ≤ TIP_THRESH
-   *   bottom d ≤ DEEP_THRESH
-   */
   protected selectCore(move: FaceTurnMove): THREE.Object3D[] {
     this.group.updateMatrixWorld(true);
     const axis = this.faceOf(move.face).axis;
     const scratch = this.scratch;
-    if (move.bottom) {
-      return this.corePieces
-        .filter((cp) => this.coreWorldCenter(cp.mesh, scratch).dot(axis) <= DEEP_THRESH)
-        .map((cp) => cp.mesh);
-    }
-    if (move.tip) {
-      return this.corePieces
-        .filter((cp) => this.coreWorldCenter(cp.mesh, scratch).dot(axis) > TIP_THRESH)
-        .map((cp) => cp.mesh);
-    }
+    const depth = this.resolveDepth(move);
     return this.corePieces
-      .filter((cp) => {
-        const d = this.coreWorldCenter(cp.mesh, scratch).dot(axis);
-        return d > DEEP_THRESH && d <= TIP_THRESH;
-      })
+      .filter((cp) => this.inDepth(this.coreWorldCenter(cp.mesh, scratch).dot(axis), depth))
       .map((cp) => cp.mesh);
   }
 
-    protected selectLayer(move: FaceTurnMove): PolyTile[] {
+  protected selectLayer(move: FaceTurnMove): PolyTile[] {
     this.group.updateMatrixWorld(true);
     const axis = this.faceOf(move.face).axis;
-    if (move.bottom) {
-      // Bottom / 底: far band + 底座三角 (other three tips' stickers cycle with it).
-      return this.tiles.filter(
-        (tile) => this.tileWorldCenter(tile, this.scratch).dot(axis) <= DEEP_THRESH,
-      );
-    }
-    if (move.tip) {
-      // Tip / 尖: only the 3 facelets at that vertex.
-      return this.tiles.filter(
-        (tile) => this.tileWorldCenter(tile, this.scratch).dot(axis) > TIP_THRESH,
-      );
-    }
-    // Deep / 层: C3-closed mid-band excluding tip (edges + axial wedges).
-    return this.tiles.filter((tile) => {
-      const d = this.tileWorldCenter(tile, this.scratch).dot(axis);
-      return d > DEEP_THRESH && d <= TIP_THRESH;
-    });
+    const depth = this.resolveDepth(move);
+    return this.tiles.filter((tile) =>
+      this.inDepth(this.tileWorldCenter(tile, this.scratch).dot(axis), depth),
+    );
   }
 
   protected turnAngle(move: FaceTurnMove): number {
@@ -679,13 +764,10 @@ export class Pyraminx extends PolyPuzzle {
   }
 
   protected scrambleLength(): number {
-    return 12;
+    return 8 + this.order * 2;
   }
 
-  /**
-   * Scramble: mostly deep mid-band; some tip (~12%); occasional bottom (~10%).
-   * Tip and deep are independent; bottom about T may cycle the other three tips.
-   */
+  /** Scramble: random tip + random depth band. */
   async scramble(): Promise<void> {
     if (this.isBusy()) return;
     this.stopped = false;
@@ -700,14 +782,15 @@ export class Pyraminx extends PolyPuzzle {
       let face = this.faces[Math.floor(Math.random() * this.faces.length)].id;
       while (face === previous) face = this.faces[Math.floor(Math.random() * this.faces.length)].id;
       previous = face;
-      const r = Math.random();
-      const tip = r < 0.12;
-      const bottom = !tip && r < 0.22;
+      const depth = Math.floor(Math.random() * this.order);
+      const packed = this.packLayer(face, depth);
       moves.push({
         kind: 'face',
         face,
         steps: Math.random() < 0.5 ? 1 : -1,
-        ...(tip ? { tip: true } : bottom ? { bottom: true } : {}),
+        depth: packed.depth,
+        ...(packed.tip ? { tip: true } : {}),
+        ...(packed.bottom ? { bottom: true } : {}),
       });
     }
     this.emit({ type: 'scramble', text: moves.map((m) => this.notation(m)).join(' '), length });
@@ -733,25 +816,31 @@ export class Pyraminx extends PolyPuzzle {
   }
 
   getFaceButtons(): FaceButton[] {
-    return [
-      ...this.faces.map((f) => ({
-        id: f.id,
-        label: `${f.label}层`,
-        color: f.colorCss,
-      })),
-      ...this.faces.map((f) => ({
-        id: f.id,
-        label: `${f.label}尖`,
-        color: f.colorCss,
-        tip: true,
-      })),
-      ...this.faces.map((f) => ({
-        id: f.id,
-        label: `${f.label}底`,
-        color: f.colorCss,
-        bottom: true,
-      })),
-    ];
+    const buttons: FaceButton[] = [];
+    for (let depth = 0; depth < this.order; depth++) {
+      for (const f of this.faces) {
+        const packed = this.packLayer(f.id, depth);
+        let label: string;
+        if (this.order === 3) {
+          label = depth === 0 ? `${f.label}尖` : depth === 2 ? `${f.label}底` : `${f.label}层`;
+        } else if (depth === 0) {
+          label = `${f.label}尖`;
+        } else if (depth === this.order - 1) {
+          label = `${f.label}底`;
+        } else {
+          label = `${f.label}${depth}`;
+        }
+        buttons.push({
+          id: f.id,
+          label,
+          color: f.colorCss,
+          depth: packed.depth,
+          ...(packed.tip ? { tip: true } : {}),
+          ...(packed.bottom ? { bottom: true } : {}),
+        });
+      }
+    }
+    return buttons;
   }
 
   /** Test helper: layer sizes and C3 slot closure (no animation). */
@@ -768,18 +857,20 @@ export class Pyraminx extends PolyPuzzle {
     bottomLeavesMid: boolean;
     deepRoundTrip: boolean;
     bottomRoundTrip: boolean;
+    order: number;
+    bandCounts: number[];
   } {
     this.group.updateMatrixWorld(true);
     const axis = this.faces[0].axis;
     const slots = this.tiles.map((t) => this.tileWorldCenter(t).clone());
-    const tip = this.tiles.filter((t) => this.tileWorldCenter(t, this.scratch).dot(axis) > TIP_THRESH);
-    const deep = this.tiles.filter((t) => {
-      const d = this.tileWorldCenter(t, this.scratch).dot(axis);
-      return d > DEEP_THRESH && d <= TIP_THRESH;
-    });
-    const bottom = this.tiles.filter((t) => {
-      return this.tileWorldCenter(t, this.scratch).dot(axis) <= DEEP_THRESH;
-    });
+    const tip = this.tiles.filter((t) => this.inDepth(this.tileWorldCenter(t, this.scratch).dot(axis), 0));
+    const deepDepth = Math.min(1, this.order - 1);
+    const deep = this.tiles.filter((t) =>
+      this.inDepth(this.tileWorldCenter(t, this.scratch).dot(axis), deepDepth),
+    );
+    const bottom = this.tiles.filter((t) =>
+      this.inDepth(this.tileWorldCenter(t, this.scratch).dot(axis), this.order - 1),
+    );
     const q = new THREE.Quaternion().setFromAxisAngle(axis, (Math.PI * 2) / 3);
     const closed = (sel: PolyTile[]) =>
       sel.every((t) => {
@@ -802,6 +893,9 @@ export class Pyraminx extends PolyPuzzle {
       }
       return true;
     };
+    const bandCounts = Array.from({ length: this.order }, (_, d) =>
+      this.tiles.filter((t) => this.inDepth(this.tileWorldCenter(t, this.scratch).dot(axis), d)).length,
+    );
     return {
       tipCount: tip.length,
       deepCount: deep.length,
@@ -815,6 +909,13 @@ export class Pyraminx extends PolyPuzzle {
       bottomLeavesMid,
       deepRoundTrip: roundTrip(deep),
       bottomRoundTrip: roundTrip(bottom),
+      order: this.order,
+      bandCounts,
     };
+  }
+
+  /** Threshold accessors for verify scripts. */
+  debugThresholds(): { tip: number; bottom: number; all: number[] } {
+    return { tip: this.tipThresh(), bottom: this.bottomThresh(), all: [...this.depthThresh] };
   }
 }

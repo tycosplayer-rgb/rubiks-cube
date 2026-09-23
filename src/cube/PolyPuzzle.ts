@@ -267,6 +267,7 @@ export abstract class PolyPuzzle implements Puzzle {
     face: string;
     tip?: boolean;
     bottom?: boolean;
+    depth?: number;
   }): boolean {
     if (this.busy || this.locked || this.dragging || this.turnAnim || this.interactive) return false;
     if (!this.faces.some((f) => f.id === skeleton.face)) return false;
@@ -274,6 +275,7 @@ export abstract class PolyPuzzle implements Puzzle {
       kind: 'face',
       face: skeleton.face,
       steps: 0,
+      ...(skeleton.depth !== undefined ? { depth: skeleton.depth } : {}),
       ...(skeleton.tip ? { tip: true } : {}),
       ...(skeleton.bottom ? { bottom: true } : {}),
     };
@@ -393,8 +395,11 @@ export abstract class PolyPuzzle implements Puzzle {
   }
 
   protected notation(m: FaceTurnMove): string {
-    const face =
-      m.bottom ? `${m.face}w` : m.tip ? m.face.toLowerCase() : m.face;
+    let face: string;
+    if (m.bottom) face = `${m.face}w`;
+    else if (m.tip || m.depth === 0) face = m.face.toLowerCase();
+    else if (m.depth !== undefined && m.depth > 1) face = `${m.face}${m.depth}`;
+    else face = m.face;
     const abs = Math.abs(m.steps);
     const twice = abs === 2 ? '2' : '';
     return `${face}${twice}${m.steps < 0 ? "'" : ''}`;

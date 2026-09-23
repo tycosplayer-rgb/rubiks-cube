@@ -26,9 +26,14 @@ export interface FaceTurnMove {
   face: string;
   /** Signed steps: +1 = one step CW looking along outward normal (RH about outward). */
   steps: number;
-  /** Pyraminx tip-only turn when true. */
+  /**
+   * Pyraminx depth band along tip axis: 0 = tip (outermost) … order-1 = bottom.
+   * When omitted, `tip` / `bottom` aliases apply (N=3 compat: tip→0, bottom→N-1, else→1).
+   */
+  depth?: number;
+  /** Pyraminx tip-only turn when true (alias for depth 0). */
   tip?: boolean;
-  /** Pyraminx bottom layer (far band + base tips) about the tip axis when true. */
+  /** Pyraminx bottom layer (far band + base tips) about the tip axis when true (alias for depth N-1). */
   bottom?: boolean;
 }
 
@@ -42,10 +47,12 @@ export interface FaceButton {
   id: string;
   label: string;
   color: string;
-  /** Optional tip button for pyraminx */
+  /** Optional tip button for pyraminx (depth 0) */
   tip?: boolean;
-  /** Optional bottom-layer button for pyraminx */
+  /** Optional bottom-layer button for pyraminx (depth N-1) */
   bottom?: boolean;
+  /** Explicit depth band for pyraminx (preferred over tip/bottom for N≠3). */
+  depth?: number;
 }
 
 export interface Puzzle {
@@ -79,6 +86,8 @@ export interface Puzzle {
   getFloorY(): number;
   /** Optional labeled face-turn buttons. */
   getFaceButtons(): FaceButton[];
+  /** Optional order (cube / pyraminx / megaminx). */
+  getOrder?(): number;
 
   /**
    * Optional continuous layer-drag (Pyraminx). When present, controls use
@@ -96,4 +105,5 @@ export interface LayerDragSession {
   readonly face: string;
   readonly tip?: boolean;
   readonly bottom?: boolean;
+  readonly depth?: number;
 }

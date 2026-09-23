@@ -9,8 +9,8 @@ const COLORS = [
 const CSS = COLORS.map((c) => `#${c.toString(16).padStart(6, '0')}`);
 const IDS = ['U', 'R', 'FR', 'DR', 'D', 'DL', 'L', 'FL', 'BR', 'B', 'BL', 'DB'];
 
-/** Center pentagon radius as fraction of outer vertex distance from face center. */
-const INNER_SCALE = 0.40;
+/** Center pentagon radius as fraction of outer vertex distance from face center (N=3). */
+const INNER_SCALE_N3 = 0.40;
 /** Corner tip depth along each outer edge (fraction of edge length from the vertex). */
 const CORNER_EDGE_T = 0.32;
 /** Geometry inset for grooves (keep gaps via mesh, not styleScale). */
@@ -23,7 +23,7 @@ const CORE_RADIUS = 2.32;
 const VERT_EPS = 1e-4;
 /**
  * Stickers currently on a face project ~2.19 onto the face axis; the next
- * band (adjacent-face ring) is ~1.84. Midway cut selects the on-face 11.
+ * band (adjacent-face ring) is ~1.84. Midway cut selects the on-face stickers.
  */
 const FACE_LAYER_THRESH = 2.0;
 
@@ -34,25 +34,34 @@ interface FoundFace {
 
 interface MegaTile extends PolyTile {
   pieceId: string;
-  kind: 'center' | 'edge' | 'corner';
+  kind: 'center' | 'edge' | 'corner' | 'ring';
   faceIndex: number;
 }
 
 /**
- * Dodecahedron Megaminx with classic star-cut faces:
- * each face = 1 center + 5 corners + 5 edges (11 stickers). Grooves read as 五角星.
- * Face turns are 72°. Layer selection is position-based then expanded by piece id
- * so the set stays correct after pieces permute.
+ * Dodecahedron Megaminx, orders 2–7.
+ * N=3: classic star-cut (1 center + 5 edges + 5 corners).
+ * N=2: Junior-like corners only.
+ * N≥4: center + inner face-local rings + outer shared corners/edges.
+ * Face turns 72°; one outer face layer per turn (whole on-face stickers + piece expand).
  */
 export class Megaminx extends PolyPuzzle {
   readonly puzzleType = 'megaminx' as const;
+  private readonly order: number;
   private readonly megaTiles: MegaTile[] = [];
   private readonly scratch = new THREE.Vector3();
 
-  constructor(style: VisualStyle = 'sticker') {
-    super(style);
+  constructor(orderOrStyle: number | VisualStyle = 3, style: VisualStyle = 'sticker') {
+    const order = typeof orderOrStyle === 'number' ? orderOrStyle : 3;
+    const st = typeof orderOrStyle === 'number' ? style : orderOrStyle;
+    super(st);
+    this.order = THREE.MathUtils.clamp(Math.round(order), 2, 7);
     this.build();
     this.finishBuild();
+  }
+
+  getOrder(): number {
+    return this.order;
   }
 
   /** No styleScale inflate — avoids full-color z-fighting; grooves come from inset. */
@@ -64,7 +73,6 @@ export class Megaminx extends PolyPuzzle {
     const source = new THREE.DodecahedronGeometry(2.7, 0);
     const pos = source.getAttribute('position');
 
-    // Global vertex merge: one canonical Vector3 per geometric corner.
     const canon: THREE.Vector3[] = [];
     const snap = (v: THREE.Vector3): THREE.Vector3 => {
       for (const c of canon) {
@@ -106,7 +114,6 @@ export class Megaminx extends PolyPuzzle {
       colorCss: CSS[i],
     }));
 
-    // Recessed soft-gray core: mid-turn shear gaps show plastic, not black clip.
     this.core = new THREE.Mesh(
       new THREE.DodecahedronGeometry(CORE_RADIUS, 0),
       new THREE.MeshStandardMaterial({
@@ -122,7 +129,6 @@ export class Megaminx extends PolyPuzzle {
     this.core.renderOrder = -1;
     this.group.add(this.core);
 
-    // Stable ids from canonical (merged) vertices.
     const vertId = new Map<THREE.Vector3, number>();
     canon.forEach((v, i) => vertId.set(v, i));
     const edgeId = (a: THREE.Vector3, b: THREE.Vector3): string => {
@@ -132,53 +138,78 @@ export class Megaminx extends PolyPuzzle {
     };
 
     found.forEach((f, faceIndex) => {
-      const faceId = IDS[faceIndex];
-      const center = f.points
-        .reduce((sum, p) => sum.add(p), new THREE.Vector3())
-        .multiplyScalar(1 / f.points.length);
-      const normal = f.normal.clone().normalize();
-      const u = f.points[0].clone().sub(center).normalize();
-      const v = new THREE.Vector3().crossVectors(normal, u).normalize();
+      this.buildFace(f, faceIndex, vertId, edgeId);
+    });
+  }
 
-      // CCW around outward normal for consistent winding.
-      const raw = [...f.points].sort((a, b) => {
-        const aa = Math.atan2(a.clone().sub(center).dot(v), a.clone().sub(center).dot(u));
-        const bb = Math.atan2(b.clone().sub(center).dot(v), b.clone().sub(center).dot(u));
-        return aa - bb;
-      });
+  private buildFace(
+    f: FoundFace,
+    faceIndex: number,
+    vertId: Map<THREE.Vector3, number>,
+    edgeId: (a: THREE.Vector3, b: THREE.Vector3) => string,
+  ): void {
+    const faceId = IDS[faceIndex];
+    const center = f.points
+      .reduce((sum, p) => sum.add(p), new THREE.Vector3())
+      .multiplyScalar(1 / f.points.length);
+    const normal = f.normal.clone().normalize();
+    const u = f.points[0].clone().sub(center).normalize();
+    const v = new THREE.Vector3().crossVectors(normal, u).normalize();
 
-      const points = raw.map((p) => p.clone().addScaledVector(normal, FACELET_OUTSET));
-      const c = center.clone().addScaledVector(normal, FACELET_OUTSET);
-      const inner = points.map((p) => c.clone().lerp(p, INNER_SCALE));
+    const raw = [...f.points].sort((a, b) => {
+      const aa = Math.atan2(a.clone().sub(center).dot(v), a.clone().sub(center).dot(u));
+      const bb = Math.atan2(b.clone().sub(center).dot(v), b.clone().sub(center).dot(u));
+      return aa - bb;
+    });
 
-      const addPoly = (
-        poly: THREE.Vector3[],
-        pieceId: string,
-        kind: MegaTile['kind'],
-      ) => {
-        const mid = poly.reduce((sum, p) => sum.add(p), new THREE.Vector3()).multiplyScalar(1 / poly.length);
-        const inset = poly.map((p) => mid.clone().lerp(p, STICKER_SHRINK));
-        // Fan from vertex 0; raw order is CCW so triangles keep outward winding.
-        const verts: THREE.Vector3[] = [];
-        for (let k = 1; k < inset.length - 1; k++) verts.push(inset[0], inset[k], inset[k + 1]);
-        const geo = new THREE.BufferGeometry().setFromPoints(verts);
-        geo.computeVertexNormals();
-        this.addTile(geo, COLORS[faceIndex], faceId);
-        const tile = this.tiles[this.tiles.length - 1] as MegaTile;
-        tile.pieceId = pieceId;
-        tile.kind = kind;
-        tile.faceIndex = faceIndex;
-        tile.mesh.userData.pieceId = pieceId;
-        tile.mesh.userData.kind = kind;
-        tile.mesh.userData.faceIndex = faceIndex;
-        // Pull stickers in front of the core; avoids z-fight without scaling.
-        tile.mesh.material.polygonOffset = true;
-        tile.mesh.material.polygonOffsetFactor = -4;
-        tile.mesh.material.polygonOffsetUnits = -4;
-        tile.mesh.renderOrder = 1;
-        this.megaTiles.push(tile);
-      };
+    const points = raw.map((p) => p.clone().addScaledVector(normal, FACELET_OUTSET));
+    const c = center.clone().addScaledVector(normal, FACELET_OUTSET);
 
+    const addPoly = (
+      poly: THREE.Vector3[],
+      pieceId: string,
+      kind: MegaTile['kind'],
+    ) => {
+      const mid = poly.reduce((sum, p) => sum.add(p), new THREE.Vector3()).multiplyScalar(1 / poly.length);
+      const inset = poly.map((p) => mid.clone().lerp(p, STICKER_SHRINK));
+      const verts: THREE.Vector3[] = [];
+      for (let k = 1; k < inset.length - 1; k++) verts.push(inset[0], inset[k], inset[k + 1]);
+      const geo = new THREE.BufferGeometry().setFromPoints(verts);
+      geo.computeVertexNormals();
+      this.addTile(geo, COLORS[faceIndex], faceId);
+      const tile = this.tiles[this.tiles.length - 1] as MegaTile;
+      tile.pieceId = pieceId;
+      tile.kind = kind;
+      tile.faceIndex = faceIndex;
+      tile.mesh.userData.pieceId = pieceId;
+      tile.mesh.userData.kind = kind;
+      tile.mesh.userData.faceIndex = faceIndex;
+      tile.mesh.material.polygonOffset = true;
+      tile.mesh.material.polygonOffsetFactor = -4;
+      tile.mesh.material.polygonOffsetUnits = -4;
+      tile.mesh.renderOrder = 1;
+      this.megaTiles.push(tile);
+    };
+
+    const N = this.order;
+
+    if (N === 2) {
+      // Junior-like: 5 corner kites meeting at center (no separate center/edges).
+      for (let i = 0; i < 5; i++) {
+        const i0 = (i + 4) % 5;
+        const i1 = (i + 1) % 5;
+        const Vi = points[i];
+        const midPrev = Vi.clone().lerp(points[i0], 0.5);
+        const midNext = Vi.clone().lerp(points[i1], 0.5);
+        const cornerId = `corner:${vertId.get(raw[i])}`;
+        addPoly([Vi, midNext, c, midPrev], cornerId, 'corner');
+      }
+      return;
+    }
+
+    if (N === 3) {
+      // Exact classic star cut.
+      const inner = points.map((p) => c.clone().lerp(p, INNER_SCALE_N3));
       const centerId = `center:${faceId}`;
       addPoly(inner, centerId, 'center');
 
@@ -195,13 +226,72 @@ export class Megaminx extends PolyPuzzle {
         const cutNearI1 = points[i1].clone().lerp(Vi, CORNER_EDGE_T);
 
         const cornerId = `corner:${vertId.get(raw[i])}`;
-        // Kite: tip → cutNext → inner → cutPrev (CCW).
         addPoly([Vi, cutNext, inner[i], cutPrev], cornerId, 'corner');
 
         const eId = `edge:${edgeId(raw[i], raw[i1])}`;
         addPoly([cutNearI, cutNearI1, inner[i1], inner[i]], eId, 'edge');
       }
-    });
+      return;
+    }
+
+    // N ≥ 4: center + (N-3) inner face-local rings + outer shared corners/edges.
+    // Ring scales from center outward; outer ring uses classic corner/edge cut.
+    const ringCount = N - 2; // number of inset boundaries before outer (incl. center edge)
+    // scales[0] = center outer edge; scales[ringCount-1] = outer-ring inner edge
+    const scales: number[] = [];
+    for (let k = 1; k <= ringCount; k++) {
+      // Spread from ~0.22 toward ~0.55 so outer corners stay similar size to N=3.
+      scales.push(0.18 + (0.55 - 0.18) * (k / ringCount));
+    }
+    const inners = scales.map((s) => points.map((p) => c.clone().lerp(p, s)));
+
+    // Center pentagon
+    addPoly(inners[0], `center:${faceId}`, 'center');
+
+    // Intermediate rings (face-local): trapezoids between consecutive scales.
+    for (let r = 0; r < ringCount - 1; r++) {
+      const inner = inners[r];
+      const outer = inners[r + 1];
+      for (let i = 0; i < 5; i++) {
+        const i1 = (i + 1) % 5;
+        // Split each trapezoid into an "edge" quad + optional — keep one quad per sector
+        // for density ~O(N), plus corner wedges for star look.
+        const midOuter = outer[i].clone().lerp(outer[i1], 0.5);
+        const midInner = inner[i].clone().lerp(inner[i1], 0.5);
+        // Edge-ish mid piece
+        addPoly(
+          [outer[i], midOuter, midInner, inner[i]],
+          `ring:${faceId}:${r}:a:${i}`,
+          'ring',
+        );
+        addPoly(
+          [midOuter, outer[i1], inner[i1], midInner],
+          `ring:${faceId}:${r}:b:${i}`,
+          'ring',
+        );
+      }
+    }
+
+    // Outer ring: shared corners + edges against innermost = inners[last]
+    const inner = inners[ringCount - 1];
+    for (let i = 0; i < 5; i++) {
+      const i1 = (i + 1) % 5;
+      const i0 = (i + 4) % 5;
+      const Vi = points[i];
+      const Vprev = points[i0];
+      const Vnext = points[i1];
+
+      const cutPrev = Vi.clone().lerp(Vprev, CORNER_EDGE_T);
+      const cutNext = Vi.clone().lerp(Vnext, CORNER_EDGE_T);
+      const cutNearI = Vi.clone().lerp(points[i1], CORNER_EDGE_T);
+      const cutNearI1 = points[i1].clone().lerp(Vi, CORNER_EDGE_T);
+
+      const cornerId = `corner:${vertId.get(raw[i])}`;
+      addPoly([Vi, cutNext, inner[i], cutPrev], cornerId, 'corner');
+
+      const eId = `edge:${edgeId(raw[i], raw[i1])}`;
+      addPoly([cutNearI, cutNearI1, inner[i1], inner[i]], eId, 'edge');
+    }
   }
 
   /**
@@ -236,12 +326,8 @@ export class Megaminx extends PolyPuzzle {
   }
 
   /**
-   * Swipe → which face to turn (edge → side face / 棱→侧面):
-   * 手指所在的面只动一条棱，是手指指的这条棱所在的那个侧面动。
-   * Front face F = under finger. Edge sticker → turn the other face S≠F that owns
-   * this edge (so on F you typically see only that one edge move). Corner → score
-   * among faces containing the corner except F. Center → turn F. Direction: score
-   * ±1 steps only on the chosen face (finger-follows, screen Y-flip).
+   * Swipe → which face to turn (edge → side face / 棱→侧面).
+   * For N=2 (corners only) and ring stickers, fall back to front-face turn.
    */
   dragToMove(
     mesh: THREE.Mesh,
@@ -257,7 +343,6 @@ export class Megaminx extends PolyPuzzle {
     const front = this.resolveHitFace(point, normal);
     if (!front && !pieceId) return null;
 
-    // Faces whose current layer contains this piece (same as selectLayer membership).
     this.group.updateMatrixWorld(true);
     const containing: PolyFace[] = [];
     if (pieceId) {
@@ -269,31 +354,25 @@ export class Megaminx extends PolyPuzzle {
       }
     }
 
-    // Choose which face to turn — not multi-face argmax over F∪siblings.
     let chosen: PolyFace | null = null;
-    let scoreCandidates: PolyFace[] | null = null; // when set, pick face+steps together
+    let scoreCandidates: PolyFace[] | null = null;
 
-    if (stickerKind === 'center' || (!stickerKind && front)) {
-      // Center (or unknown on F): only F makes sense.
+    if (stickerKind === 'center' || stickerKind === 'ring' || (!stickerKind && front)) {
       chosen = front ?? containing[0] ?? null;
     } else if (stickerKind === 'edge') {
-      // Edge: turn the side face S ≠ F that owns this 棱 — do not turn F.
       const sides = containing.filter((f) => !front || f.id !== front.id);
       if (sides.length === 1) {
         chosen = sides[0];
       } else if (sides.length > 1) {
         scoreCandidates = sides;
       } else {
-        // Data bug: no other face — prefer not turning F for edges.
         return null;
       }
     } else if (stickerKind === 'corner') {
-      // Corner: two side faces; pick by swipe. Do not turn F unless only F qualifies.
       const sides = containing.filter((f) => !front || f.id !== front.id);
       if (sides.length) scoreCandidates = sides;
       else chosen = front;
     } else {
-      // No kind / no piece: fall back to front face.
       chosen = front;
     }
 
@@ -360,8 +439,7 @@ export class Megaminx extends PolyPuzzle {
 
   /**
    * Select stickers currently on the turned face (axis projection), then expand
-   * to every sticker sharing those piece ids (center + 5 edges + 5 corners → ~26).
-   * Build-time face→piece maps go stale after adjacent turns; position is truth.
+   * to every sticker sharing those piece ids.
    */
   protected selectLayer(move: FaceTurnMove): PolyTile[] {
     this.group.updateMatrixWorld(true);
@@ -378,7 +456,7 @@ export class Megaminx extends PolyPuzzle {
   }
 
   protected scrambleLength(): number {
-    return 24;
+    return 16 + this.order * 4;
   }
 
   getFitDistance(): number {
@@ -398,6 +476,15 @@ export class Megaminx extends PolyPuzzle {
     );
   }
 
+  /** Expected on-face sticker count for this order (solved). */
+  expectedPerFace(): number {
+    const N = this.order;
+    if (N === 2) return 5;
+    if (N === 3) return 11;
+    // center + (N-3) rings × 10 + 5 corners + 5 edges
+    return 1 + (N - 3) * 10 + 10;
+  }
+
   /** Test helper: counts and C5 closure (no animation). */
   debugVerifyLayers(): {
     tiles: number;
@@ -406,9 +493,11 @@ export class Megaminx extends PolyPuzzle {
     centers: number;
     edges: number;
     corners: number;
+    rings: number;
     layerClosed: boolean;
     fiveTurnClosed: boolean;
     pieceGraphOk: boolean;
+    order: number;
   } {
     this.group.updateMatrixWorld(true);
     const faceId = this.faces[0].id;
@@ -426,7 +515,7 @@ export class Megaminx extends PolyPuzzle {
       for (let i = 0; i < 5; i++) c.applyQuaternion(q);
       if (c.distanceTo(this.tileWorldCenter(t)) > 0.12) fiveTurnClosed = false;
     }
-    const kinds = { center: 0, edge: 0, corner: 0 };
+    const kinds = { center: 0, edge: 0, corner: 0, ring: 0 };
     for (const t of this.megaTiles) kinds[t.kind]++;
 
     const byPiece = new Map<string, number>();
@@ -436,11 +525,16 @@ export class Megaminx extends PolyPuzzle {
       if (id.startsWith('center:') && n !== 1) pieceGraphOk = false;
       if (id.startsWith('edge:') && n !== 2) pieceGraphOk = false;
       if (id.startsWith('corner:') && n !== 3) pieceGraphOk = false;
+      if (id.startsWith('ring:') && n !== 1) pieceGraphOk = false;
     }
-    pieceGraphOk =
-      pieceGraphOk &&
-      kinds.center === 12 &&
-      byPiece.size === 12 + 30 + 20;
+    if (this.order === 3) {
+      pieceGraphOk =
+        pieceGraphOk &&
+        kinds.center === 12 &&
+        byPiece.size === 12 + 30 + 20;
+    } else if (this.order === 2) {
+      pieceGraphOk = pieceGraphOk && kinds.corner === 60 && kinds.center === 0 && kinds.edge === 0;
+    }
 
     const onFace = this.stickersOnFace(faceId).length;
     return {
@@ -450,9 +544,11 @@ export class Megaminx extends PolyPuzzle {
       centers: kinds.center,
       edges: kinds.edge,
       corners: kinds.corner,
+      rings: kinds.ring,
       layerClosed,
       fiveTurnClosed,
       pieceGraphOk,
+      order: this.order,
     };
   }
 }

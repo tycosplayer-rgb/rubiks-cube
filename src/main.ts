@@ -145,6 +145,11 @@ function loadVisualStyle(): VisualStyle {
 }
 function saveVisualStyle(style: VisualStyle): void { try { localStorage.setItem(STYLE_STORAGE_KEY, style); } catch { /* ignore */ } }
 const PUZZLE_TYPE_STORAGE_KEY = 'rubiks-puzzle-type';
+const ORDER_KEYS: Record<PuzzleType, string> = {
+  cube: 'rubiks-cube-order',
+  pyraminx: 'rubiks-pyraminx-order',
+  megaminx: 'rubiks-megaminx-order',
+};
 function loadPuzzleType(): PuzzleType {
   try {
     const v = localStorage.getItem(PUZZLE_TYPE_STORAGE_KEY);
@@ -155,14 +160,37 @@ function loadPuzzleType(): PuzzleType {
 function savePuzzleType(type: PuzzleType): void {
   try { localStorage.setItem(PUZZLE_TYPE_STORAGE_KEY, type); } catch { /* ignore */ }
 }
+function loadOrder(type: PuzzleType): number {
+  try {
+    const v = Number(localStorage.getItem(ORDER_KEYS[type]));
+    if (Number.isFinite(v) && v >= 2 && v <= 7) return Math.round(v);
+  } catch { /* ignore */ }
+  return 3;
+}
+function saveOrder(type: PuzzleType, order: number): void {
+  try { localStorage.setItem(ORDER_KEYS[type], String(order)); } catch { /* ignore */ }
+}
 let visualStyle = loadVisualStyle();
 let currentType = loadPuzzleType();
 typeSel.value = currentType;
-let currentOrder = 3;
+let orders: Record<PuzzleType, number> = {
+  cube: loadOrder('cube'),
+  pyraminx: loadOrder('pyraminx'),
+  megaminx: loadOrder('megaminx'),
+};
 function createPuzzle(type: PuzzleType): Puzzle {
-  if (type === 'pyraminx') return new Pyraminx(visualStyle);
-  if (type === 'megaminx') return new Megaminx(visualStyle);
-  return new RubiksCube(currentOrder, visualStyle);
+  const order = orders[type];
+  if (type === 'pyraminx') return new Pyraminx(order, visualStyle);
+  if (type === 'megaminx') return new Megaminx(order, visualStyle);
+  return new RubiksCube(order, visualStyle);
+}
+function rebuildOrderOptions(type: PuzzleType): void {
+  const order = orders[type];
+  const opts = [2, 3, 4, 5, 6, 7].map((n) => {
+    const label = type === 'cube' ? `${n}×${n}×${n}` : `${n}阶`;
+    return `<option value="${n}" ${n === order ? 'selected' : ''}>${label}</option>`;
+  });
+  orderSel.innerHTML = opts.join('');
 }
 let puzzle: Puzzle = createPuzzle(currentType);
 puzzle.setCastShadows(useShadows);
@@ -178,7 +206,7 @@ applyStyleUI(visualStyle);
 
 function setBusy(busy: boolean): void {
   btnScramble.disabled = busy; btnSolve.disabled = busy; btnReset.disabled = busy; typeSel.disabled = busy;
-  orderSel.disabled = busy || currentType !== 'cube';
+  orderSel.disabled = busy;
   faceControls.querySelectorAll('button').forEach((b) => { (b as HTMLButtonElement).disabled = busy; });
 }
 function resetHud(): void {
@@ -208,36 +236,43 @@ function renderFaceControls(): void {
   faceControls.innerHTML = buttons.map((b) => `
     <span class="face-turn-pair" style="--face-color:${b.color}">
       <b>${b.label}</b>
-      <button type="button" data-face="${b.id}" data-tip="${b.tip ? '1' : '0'}" data-bottom="${b.bottom ? '1' : '0'}" data-dir="1" aria-label="${b.label} 顺时针">↻</button>
-      <button type="button" data-face="${b.id}" data-tip="${b.tip ? '1' : '0'}" data-bottom="${b.bottom ? '1' : '0'}" data-dir="-1" aria-label="${b.label} 逆时针">↺</button>
+      <button type="button" data-face="${b.id}" data-tip="${b.tip ? '1' : '0'}" data-bottom="${b.bottom ? '1' : '0'}" data-depth="${b.depth !== undefined ? b.depth : ''}" data-dir="1" aria-label="${b.label} 顺时针">↻</button>
+      <button type="button" data-face="${b.id}" data-tip="${b.tip ? '1' : '0'}" data-bottom="${b.bottom ? '1' : '0'}" data-depth="${b.depth !== undefined ? b.depth : ''}" data-dir="-1" aria-label="${b.label} 逆时针">↺</button>
     </span>`).join('');
   faceControls.querySelectorAll<HTMLButtonElement>('button').forEach((button) => button.addEventListener('click', () => {
     const face = button.dataset.face!;
     const steps = Number(button.dataset.dir);
     const tip = button.dataset.tip === '1';
     const bottom = button.dataset.bottom === '1';
+    const depthStr = button.dataset.depth ?? '';
+    const depth = depthStr === '' ? undefined : Number(depthStr);
     void puzzle.applyMove({
       kind: 'face',
       face,
       steps,
-      ...(tip ? { tip: true } : bottom ? { bottom: true } : {}),
+      ...(depth !== undefined && Number.isFinite(depth) ? { depth } : {}),
+      ...(tip ? { tip: true } : {}),
+      ...(bottom ? { bottom: true } : {}),
     }, true);
   }));
 }
 function updateTypeUI(): void {
-  const isCube = currentType === 'cube';
-  orderCtrl.classList.toggle('hidden', !isCube);
-  orderSel.disabled = !isCube;
-  subtitleEl.textContent = isCube
-    ? '标准配色 · 2×2–7×7'
-    : currentType === 'pyraminx'
-      ? '金字塔 · 四尖轴 120°'
-      : '十二面体 · 五角星切割 · 72° 面转';
-  hintEl.textContent = isCube
-    ? '智能：单指点色块拧层、点空白转视角；双指始终转视角 · 可切换「视角/拧动」锁定'
-    : currentType === 'pyraminx'
-      ? '尖轴按钮：U层/L层…为棱层（不含尖），U尖…为只转尖角；角与棱独立；也可拖色块绕近尖转动，空白处转视角'
-      : '使用上方面转按钮可靠操作（↻/↺）；也可拖动色块尝试面转，空白处拖动旋转视角 · 双指缩放';
+  orderCtrl.classList.remove('hidden');
+  orderSel.disabled = false;
+  rebuildOrderOptions(currentType);
+  const n = orders[currentType];
+  subtitleEl.textContent =
+    currentType === 'cube'
+      ? '标准配色 · 2×2–7×7'
+      : currentType === 'pyraminx'
+        ? `金字塔 · ${n}阶 · 四尖轴 120°`
+        : `十二面体 · ${n}阶 · 72° 面转`;
+  hintEl.textContent =
+    currentType === 'cube'
+      ? '智能：单指点色块拧层、点空白转视角；双指始终转视角 · 可切换「视角/拧动」锁定'
+      : currentType === 'pyraminx'
+        ? '尖轴按钮：尖 / 层… / 底 按阶数分带；也可拖色块绕近尖转动，空白处转视角'
+        : '使用上方面转按钮可靠操作（↻/↺）；也可拖动色块尝试面转，空白处拖动旋转视角 · 双指缩放';
   faceControls.setAttribute(
     'aria-label',
     currentType === 'pyraminx' ? '金字塔尖轴转动' : currentType === 'megaminx' ? '十二面体面转' : '面转按钮',
@@ -263,7 +298,13 @@ function switchPuzzle(type: PuzzleType): void {
   fitCamera();
   resetHud();
   updateTypeUI();
-  statusEl.textContent = type === 'cube' ? `方块魔方 ${currentOrder}×${currentOrder}×${currentOrder}（已复位）` : type === 'pyraminx' ? '金字塔已就绪' : '十二面体已就绪';
+  const n = orders[type];
+  statusEl.textContent =
+    type === 'cube'
+      ? `方块魔方 ${n}×${n}×${n}（已复位）`
+      : type === 'pyraminx'
+        ? `金字塔 ${n}阶已就绪`
+        : `十二面体 ${n}阶已就绪`;
 }
 
 for (const btn of styleBtns) btn.addEventListener('click', () => {
@@ -277,7 +318,13 @@ for (const btn of modeBtns) btn.addEventListener('click', () => {
   statusEl.textContent = mode === 'smart' ? '智能模式：色块拧动，空白转视角' : mode === 'orbit' ? '视角模式：拖拽只旋转相机' : '拧动模式：拖拽只拧层';
 });
 typeSel.addEventListener('change', () => switchPuzzle(typeSel.value as PuzzleType));
-orderSel.addEventListener('change', () => { currentOrder = Number(orderSel.value); switchPuzzle('cube'); });
+orderSel.addEventListener('change', () => {
+  const n = Number(orderSel.value);
+  if (!Number.isFinite(n) || n < 2 || n > 7) return;
+  orders[currentType] = n;
+  saveOrder(currentType, n);
+  switchPuzzle(currentType);
+});
 speedInp.addEventListener('input', () => puzzle.setSpeed(Number(speedInp.value)));
 btnScramble.addEventListener('click', () => { void puzzle.scramble(); });
 btnSolve.addEventListener('click', () => { void puzzle.solve(); });

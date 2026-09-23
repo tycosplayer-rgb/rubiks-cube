@@ -5,7 +5,7 @@
 import { Megaminx } from '../src/cube/Megaminx.ts';
 import * as THREE from 'three';
 
-const m = new Megaminx('sticker');
+const m = new Megaminx(3, 'sticker');
 const v = m.debugVerifyLayers();
 console.log('layers', v);
 
@@ -454,6 +454,58 @@ function assertDragScoring() {
 m.reset();
 const dragScoringOk = assertDragScoring();
 
+
+// --- Order smoke: N=2 and N=7 ---
+function smokeMegaOrder(N) {
+  const q = new Megaminx(N, 'sticker');
+  const vv = q.debugVerifyLayers();
+  const expected = q.expectedPerFace();
+  const layer = q['selectLayer']({ kind: 'face', face: 'U', steps: 1 });
+  const getCenters = () => {
+    q.group.updateMatrixWorld(true);
+    return q['tiles'].map((t) => {
+      const c = new THREE.Vector3();
+      const attr = t.mesh.geometry.getAttribute('position');
+      for (let i = 0; i < attr.count; i++) c.add(new THREE.Vector3().fromBufferAttribute(attr, i));
+      return c.multiplyScalar(1 / attr.count).applyMatrix4(t.mesh.matrixWorld);
+    });
+  };
+  const apply = (face, steps) => {
+    const move = { kind: 'face', face, steps };
+    const selected = q['selectLayer'](move);
+    const axis = q['faceOf'](face).axis;
+    const angle = q['turnAngle'](move);
+    const pivot = q['pivot'];
+    pivot.rotation.set(0, 0, 0);
+    for (const tile of selected) reparent(tile.mesh, pivot);
+    pivot.setRotationFromAxisAngle(axis, angle);
+    q.group.updateMatrixWorld(true);
+    for (const tile of selected) reparent(tile.mesh, q.group);
+    pivot.rotation.set(0, 0, 0);
+    return selected.length;
+  };
+  const b = getCenters();
+  const nLayer = apply('U', 1);
+  apply('U', -1);
+  let rt = 0;
+  const a = getCenters();
+  for (let i = 0; i < b.length; i++) rt = Math.max(rt, b[i].distanceTo(a[i]));
+  const ok =
+    vv.order === N &&
+    vv.perFace === expected &&
+    vv.perFace > 0 &&
+    nLayer === layer.length &&
+    layer.length > 0 &&
+    vv.layerClosed &&
+    vv.fiveTurnClosed &&
+    vv.pieceGraphOk &&
+    rt < 0.05;
+  console.log('smokeMega', N, { perFace: vv.perFace, expected, layer: layer.length, rt, ok });
+  return ok;
+}
+const smokeMega2 = smokeMegaOrder(2);
+const smokeMega7 = smokeMegaOrder(7);
+
 const pass =
   v.tiles === 132 &&
   v.perFace === 11 &&
@@ -477,7 +529,9 @@ const pass =
   resolveSolved &&
   resolveAfterMoves &&
   staleTrapOk &&
-  dragScoringOk;
+  dragScoringOk &&
+  smokeMega2 &&
+  smokeMega7;
 
 console.log({
   nLayer,
