@@ -31,9 +31,15 @@ export abstract class PolyPuzzle implements Puzzle {
   protected readonly pivot = new THREE.Group();
   protected tiles: PolyTile[] = [];
   protected faces: PolyFace[] = [];
+  /**
+   * Optional monolithic core (Megaminx). Prefer `corePieces` for segmented cores
+   * (Pyraminx). If only `core` is set, finishBuild registers it as one piece.
+   */
   protected core: THREE.Mesh | null = null;
-  /** Rest pose of core (group-local); restored on reset after turn-bakes. */
-  private readonly coreInitialMatrix = new THREE.Matrix4();
+  /** Gray plastic core segment(s); each restores to initialMatrix on reset. */
+  protected corePieces: Array<{ mesh: THREE.Mesh; initialMatrix: THREE.Matrix4 }> = [];
+  /** Core meshes currently parented to the pivot for an in-flight turn. */
+  private attachedCores: THREE.Object3D[] = [];
   protected history: FaceTurnMove[] = [];
   protected listeners: Array<(e: PuzzleEvent) => void> = [];
   protected speed = 1;
@@ -81,11 +87,14 @@ export abstract class PolyPuzzle implements Puzzle {
       tile.mesh.castShadow = this.castShadows;
       tile.mesh.receiveShadow = this.castShadows;
     }
-    if (this.core) {
-      this.core.castShadow = this.castShadows;
-      this.core.receiveShadow = this.castShadows;
-      this.core.updateMatrix();
-      this.coreInitialMatrix.copy(this.core.matrix);
+    if (this.core && !this.corePieces.some((c) => c.mesh === this.core)) {
+      this.corePieces.push({ mesh: this.core, initialMatrix: new THREE.Matrix4() });
+    }
+    for (const cp of this.corePieces) {
+      cp.mesh.castShadow = this.castShadows;
+      cp.mesh.receiveShadow = this.castShadows;
+      cp.mesh.updateMatrix();
+      cp.initialMatrix.copy(cp.mesh.matrix);
     }
     this.applyStyle();
   }
@@ -124,37 +133,52 @@ export abstract class PolyPuzzle implements Puzzle {
   setCastShadows(enabled: boolean): void {
     this.castShadows = enabled;
     for (const t of this.tiles) t.mesh.castShadow = t.mesh.receiveShadow = enabled;
-    if (this.core) this.core.castShadow = this.core.receiveShadow = enabled;
+    for (const cp of this.corePieces) cp.mesh.castShadow = cp.mesh.receiveShadow = enabled;
   }
 
 
   /**
-   * While a layer turns, parent the gray core into the pivot so it rotates with
-   * the layer (no shrink / no poke-through). When the turn ends, bake the core
-   * back onto the group preserving world orientation — successive turns accumulate.
+   * Core segments that should rotate with this layer turn.
+   * Default: all core pieces (Megaminx monolithic dodecahedron).
+   * Pyraminx overrides to tip / deep / bottom bands along the tip axis.
    */
-  protected setCoreTurnSafe(animating: boolean): void {
-    if (!this.core) return;
-    if (animating) {
-      if (this.core.parent !== this.pivot) this.reparentCore(this.pivot);
-    } else if (this.core.parent !== this.group) {
-      this.reparentCore(this.group);
-    }
+  protected selectCore(_move: FaceTurnMove): THREE.Object3D[] {
+    return this.corePieces.map((c) => c.mesh);
   }
 
-  /** Reparent core preserving world pose; force unit scale (unlike facelet styleScale). */
-  protected reparentCore(newParent: THREE.Object3D): void {
-    if (!this.core) return;
-    this.core.updateWorldMatrix(true, false);
+  /**
+   * Parent selected core segments into the pivot with the facelets (no shrink).
+   * Other segments stay on `group`. Call once at turn start with the move.
+   */
+  protected attachCoreForTurn(move: FaceTurnMove): void {
+    this.detachCoreAfterTurn();
+    const selected = this.selectCore(move);
+    for (const obj of selected) {
+      if (obj.parent !== this.pivot) this.reparentCoreObject(obj, this.pivot);
+    }
+    this.attachedCores = selected;
+  }
+
+  /** Bake attached core segments back onto the group, preserving world pose. */
+  protected detachCoreAfterTurn(): void {
+    for (const obj of this.attachedCores) {
+      if (obj.parent !== this.group) this.reparentCoreObject(obj, this.group);
+    }
+    this.attachedCores = [];
+  }
+
+  /** Reparent a core mesh preserving world pose; force unit scale. */
+  protected reparentCoreObject(object: THREE.Object3D, newParent: THREE.Object3D): void {
+    object.updateWorldMatrix(true, false);
     newParent.updateWorldMatrix(true, false);
-    this._world.copy(this.core.matrixWorld);
-    if (this.core.parent !== newParent) newParent.add(this.core);
+    this._world.copy(object.matrixWorld);
+    if (object.parent !== newParent) newParent.add(object);
     this._local.copy(newParent.matrixWorld).invert().multiply(this._world);
     this._local.decompose(this._pos, this._quat, this._scl);
-    this.core.position.copy(this._pos);
-    this.core.quaternion.copy(this._quat);
-    this.core.scale.set(1, 1, 1);
-    this.core.updateMatrix();
+    object.position.copy(this._pos);
+    object.quaternion.copy(this._quat);
+    object.scale.set(1, 1, 1);
+    object.updateMatrix();
   }
 
   setVisualStyle(style: VisualStyle): void {
@@ -190,8 +214,8 @@ export abstract class PolyPuzzle implements Puzzle {
     this.pivot.setRotationFromAxisAngle(this.faceOf(a.move.face).axis, a.target);
     this.group.updateMatrixWorld(true);
     for (const tile of a.selected) this.reparentUniform(tile.mesh, this.group);
-    // Bake core while pivot still holds the final turn angle, then clear pivot.
-    this.setCoreTurnSafe(false);
+    // Bake core segments while pivot still holds the final turn angle, then clear pivot.
+    this.detachCoreAfterTurn();
     this.pivot.rotation.set(0, 0, 0);
     this.pivot.scale.set(1, 1, 1);
     if (a.record) {
@@ -220,7 +244,7 @@ export abstract class PolyPuzzle implements Puzzle {
       this.pivot.rotation.set(0, 0, 0);
       this.pivot.scale.set(1, 1, 1);
       for (const tile of selected) this.reparentUniform(tile.mesh, this.pivot);
-      this.setCoreTurnSafe(true);
+      this.attachCoreForTurn(move);
       this.turnAnim = {
         move: { ...move },
         selected,
@@ -260,7 +284,7 @@ export abstract class PolyPuzzle implements Puzzle {
     this.pivot.rotation.set(0, 0, 0);
     this.pivot.scale.set(1, 1, 1);
     for (const tile of selected) this.reparentUniform(tile.mesh, this.pivot);
-    this.setCoreTurnSafe(true);
+    this.attachCoreForTurn(move);
     this.interactive = {
       move,
       selected,
@@ -297,7 +321,7 @@ export abstract class PolyPuzzle implements Puzzle {
       this.pivot.setRotationFromAxisAngle(state.axis, target);
       this.group.updateMatrixWorld(true);
       for (const tile of state.selected) this.reparentUniform(tile.mesh, this.group);
-      this.setCoreTurnSafe(false);
+      this.detachCoreAfterTurn();
       this.pivot.rotation.set(0, 0, 0);
       this.pivot.scale.set(1, 1, 1);
       if (commitSteps !== 0) {
@@ -307,8 +331,8 @@ export abstract class PolyPuzzle implements Puzzle {
       if (!this.locked) this.emit({ type: 'busy', busy: false });
       return Promise.resolve();
     }
-    // Keep core parented to pivot (from beginInteractiveTurn) until update()
-    // bakes it back onto the group — do not detach early during the snap.
+    // Keep selected core segments parented to pivot (from beginInteractiveTurn)
+    // until update() bakes them back onto the group — do not detach early.
     this.busy = true;
     return new Promise<void>((resolve) => {
       this.turnAnim = {
@@ -336,7 +360,7 @@ export abstract class PolyPuzzle implements Puzzle {
     for (const tile of state.selected) this.reparentUniform(tile.mesh, this.group);
     this.pivot.rotation.set(0, 0, 0);
     this.pivot.scale.set(1, 1, 1);
-    this.setCoreTurnSafe(false);
+    this.detachCoreAfterTurn();
     if (!this.busy && !this.locked) this.emit({ type: 'busy', busy: false });
   }
 
@@ -441,12 +465,13 @@ export abstract class PolyPuzzle implements Puzzle {
 
   reset(): void {
     if (this.isBusy()) return;
-    this.setCoreTurnSafe(false);
-    if (this.core) {
-      this.core.matrix.copy(this.coreInitialMatrix);
-      this.core.matrix.decompose(this.core.position, this.core.quaternion, this.core.scale);
-      this.core.scale.set(1, 1, 1);
-      this.core.updateMatrix();
+    this.detachCoreAfterTurn();
+    for (const cp of this.corePieces) {
+      if (cp.mesh.parent !== this.group) this.group.add(cp.mesh);
+      cp.mesh.matrix.copy(cp.initialMatrix);
+      cp.mesh.matrix.decompose(cp.mesh.position, cp.mesh.quaternion, cp.mesh.scale);
+      cp.mesh.scale.set(1, 1, 1);
+      cp.mesh.updateMatrix();
     }
     for (const tile of this.tiles) {
       if (tile.mesh.parent !== this.group) this.group.add(tile.mesh);
@@ -554,7 +579,7 @@ export abstract class PolyPuzzle implements Puzzle {
       const r = this.turnAnim.resolve;
       this.turnAnim = null;
       this.busy = false;
-      this.setCoreTurnSafe(false);
+      this.detachCoreAfterTurn();
       r();
     }
     for (const { mesh } of this.tiles) {
@@ -563,13 +588,20 @@ export abstract class PolyPuzzle implements Puzzle {
       mesh.removeFromParent();
     }
     this.tiles = [];
-    if (this.core) {
-      this.core.geometry.dispose();
-      const mats = Array.isArray(this.core.material) ? this.core.material : [this.core.material];
-      mats.forEach((m) => m.dispose());
-      this.core.removeFromParent();
-      this.core = null;
+    const disposedMats = new Set<THREE.Material>();
+    for (const cp of this.corePieces) {
+      cp.mesh.geometry.dispose();
+      const mats = Array.isArray(cp.mesh.material) ? cp.mesh.material : [cp.mesh.material];
+      for (const m of mats) {
+        if (!disposedMats.has(m)) {
+          disposedMats.add(m);
+          m.dispose();
+        }
+      }
+      cp.mesh.removeFromParent();
     }
+    this.corePieces = [];
+    this.core = null;
     while (this.group.children.length) this.group.remove(this.group.children[0]);
     this.group.add(this.pivot);
     this.listeners = [];

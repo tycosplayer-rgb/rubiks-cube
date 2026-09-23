@@ -456,6 +456,121 @@ console.log({
   continuousOk,
 });
 
+// --- Segmented core: tip turn must not move mid/bottom core centroids ---
+function coreCenters() {
+  p.group.updateMatrixWorld(true);
+  return p['corePieces'].map((cp) => {
+    const local = cp.mesh.userData.coreCentroidLocal.clone();
+    return local.applyMatrix4(cp.mesh.matrixWorld);
+  });
+}
+
+function applyInstantWithCore(face, steps, flags = {}) {
+  const move = { kind: 'face', face, steps, ...flags };
+  const selected = p['selectLayer'](move);
+  const cores = p['selectCore'](move);
+  const axis = p['faceOf'](face).axis;
+  const angle = p['turnAngle'](move);
+  const pivot = p['pivot'];
+  pivot.rotation.set(0, 0, 0);
+  pivot.scale.set(1, 1, 1);
+  for (const tile of selected) reparent(tile.mesh, pivot);
+  for (const c of cores) reparent(c, pivot);
+  pivot.setRotationFromAxisAngle(axis, angle);
+  p.group.updateMatrixWorld(true);
+  for (const tile of selected) reparent(tile.mesh, p.group);
+  for (const c of cores) reparent(c, p.group);
+  pivot.rotation.set(0, 0, 0);
+  return { tiles: selected.length, cores: cores.length };
+}
+
+p.reset();
+const coreN = p['corePieces'].length;
+const uAxis = p['faces'][0].axis;
+let cc = coreCenters();
+const coreTipIdx = [];
+const coreDeepIdx = [];
+const coreBottomIdx = [];
+cc.forEach((pt, i) => {
+  const d = pt.dot(uAxis);
+  if (d > TIP_THRESH) coreTipIdx.push(i);
+  else if (d > DEEP_THRESH) coreDeepIdx.push(i);
+  else coreBottomIdx.push(i);
+});
+const tipCoreSel = applyInstantWithCore('U', 1, { tip: true });
+cc = coreCenters();
+// After tip turn, former tip cores should have moved; deep+bottom stay.
+p.reset();
+cc = coreCenters();
+const deepCoreBefore = coreDeepIdx.map((i) => cc[i].clone());
+const bottomCoreBefore = coreBottomIdx.map((i) => cc[i].clone());
+// Tip cores sit near the axis — centroids barely translate; check orientation instead.
+const tipQuatBefore = coreTipIdx.map((i) => p['corePieces'][i].mesh.quaternion.clone());
+const deepQuatBefore = coreDeepIdx.map((i) => p['corePieces'][i].mesh.quaternion.clone());
+applyInstantWithCore('U', 1, { tip: true });
+cc = coreCenters();
+const coreDeepDriftFromTip = Math.max(0, ...coreDeepIdx.map((i, j) => deepCoreBefore[j].distanceTo(cc[i])));
+const coreBottomDriftFromTip = Math.max(0, ...coreBottomIdx.map((i, j) => bottomCoreBefore[j].distanceTo(cc[i])));
+const coreTipRotated = Math.max(
+  0,
+  ...coreTipIdx.map((i, j) => p['corePieces'][i].mesh.quaternion.angleTo(tipQuatBefore[j])),
+);
+const coreDeepQuatFromTip = Math.max(
+  0,
+  ...coreDeepIdx.map((i, j) => p['corePieces'][i].mesh.quaternion.angleTo(deepQuatBefore[j])),
+);
+
+p.reset();
+cc = coreCenters();
+const tipCoreBeforeDeep = coreTipIdx.map((i) => cc[i].clone());
+const bottomCoreBeforeDeep = coreBottomIdx.map((i) => cc[i].clone());
+applyInstantWithCore('U', 1, {});
+cc = coreCenters();
+const coreTipDriftFromDeep = Math.max(0, ...coreTipIdx.map((i, j) => tipCoreBeforeDeep[j].distanceTo(cc[i])));
+const coreBottomDriftFromDeep = Math.max(0, ...coreBottomIdx.map((i, j) => bottomCoreBeforeDeep[j].distanceTo(cc[i])));
+
+p.reset();
+cc = coreCenters();
+const tipCoreBeforeBot = coreTipIdx.map((i) => cc[i].clone());
+const deepCoreBeforeBot = coreDeepIdx.map((i) => cc[i].clone());
+applyInstantWithCore('U', 1, { bottom: true });
+cc = coreCenters();
+const coreTipDriftFromBottom = Math.max(0, ...coreTipIdx.map((i, j) => tipCoreBeforeBot[j].distanceTo(cc[i])));
+const coreDeepDriftFromBottom = Math.max(0, ...coreDeepIdx.map((i, j) => deepCoreBeforeBot[j].distanceTo(cc[i])));
+
+const coreSegmentOk =
+  coreN >= 64 &&
+  coreTipIdx.length >= 4 &&
+  coreDeepIdx.length >= 8 &&
+  coreBottomIdx.length >= 8 &&
+  tipCoreSel.cores === coreTipIdx.length &&
+  tipCoreSel.cores > 0 &&
+  coreDeepDriftFromTip < 0.05 &&
+  coreBottomDriftFromTip < 0.05 &&
+  coreTipRotated > 0.5 &&
+  coreDeepQuatFromTip < 0.05 &&
+  coreTipDriftFromDeep < 0.05 &&
+  coreBottomDriftFromDeep < 0.05 &&
+  coreTipDriftFromBottom < 0.05 &&
+  coreDeepDriftFromBottom < 0.05;
+
+console.log({
+  coreN,
+  coreTip: coreTipIdx.length,
+  coreDeep: coreDeepIdx.length,
+  coreBottom: coreBottomIdx.length,
+  tipCoreSel,
+  coreDeepDriftFromTip,
+  coreBottomDriftFromTip,
+  coreTipRotated,
+  coreDeepQuatFromTip,
+  coreTipDriftFromDeep,
+  coreBottomDriftFromDeep,
+  coreTipDriftFromBottom,
+  coreDeepDriftFromBottom,
+  coreSegmentOk,
+});
+
 const tipButtons = p.getFaceButtons().filter((b) => b.tip);
 const bottomButtons = p.getFaceButtons().filter((b) => b.bottom);
 const faceIds = new Set(faces.map((f) => f.id));
@@ -503,7 +618,8 @@ const pass =
   bottomCarriesBaseTips &&
   tipButtonsOk2 &&
   bottomButtonsOk &&
-  continuousOk;
+  continuousOk &&
+  coreSegmentOk;
 
 console.log({
   nDeep,
@@ -548,6 +664,11 @@ console.log({
   bottomSelCount: bottomSel.length,
   bottomBaseTipCount,
   bottomHasOwnTip,
+  coreSegmentOk,
+  coreN,
+  coreTip: coreTipIdx.length,
+  coreDeepDriftFromTip,
+  coreBottomDriftFromTip,
 });
 console.log(pass ? 'PASS' : 'FAIL');
 process.exit(pass ? 0 : 1);

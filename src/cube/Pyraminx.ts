@@ -79,21 +79,8 @@ export class Pyraminx extends PolyPuzzle {
       colorCss: CSS[i],
     }));
 
-    // Recessed soft-gray core: mid-turn shear gaps show plastic, not black clip.
-    this.core = new THREE.Mesh(
-      new THREE.TetrahedronGeometry(CORE_RADIUS, 0),
-      new THREE.MeshStandardMaterial({
-        color: 0x8b929c,
-        roughness: 0.85,
-        metalness: 0.0,
-        flatShading: true,
-        polygonOffset: true,
-        polygonOffsetFactor: 2,
-        polygonOffsetUnits: 2,
-      }),
-    );
-    this.core.renderOrder = -1;
-    this.group.add(this.core);
+    // Segmented soft-gray core (tip / mid / bottom bands per tip axis).
+    this.buildSegmentedCore(vertices);
 
     for (let faceIndex = 0; faceIndex < 4; faceIndex++) {
       // Face opposite tip `faceIndex` — colored by that face's color (same index).
@@ -550,7 +537,122 @@ export class Pyraminx extends PolyPuzzle {
     };
   }
 
-  protected selectLayer(move: FaceTurnMove): PolyTile[] {
+  /**
+   * Subdivide the recessed tetrahedron into small tetras, tagged by band along
+   * each tip axis (same TIP_THRESH / DEEP_THRESH as facelets). Idle pose looks
+   * like one continuous gray plastic; turns only reparent the active band.
+   */
+  private buildSegmentedCore(tipVertices: THREE.Vector3[]): void {
+    const V = tipVertices.map((v) => v.clone().normalize().multiplyScalar(CORE_RADIUS));
+    type Tet = [THREE.Vector3, THREE.Vector3, THREE.Vector3, THREE.Vector3];
+    const mid = (a: THREE.Vector3, b: THREE.Vector3) => a.clone().add(b).multiplyScalar(0.5);
+    const subdivide = (tet: Tet): Tet[] => {
+      const [a, b, c, d] = tet;
+      const ab = mid(a, b);
+      const ac = mid(a, c);
+      const ad = mid(a, d);
+      const bc = mid(b, c);
+      const bd = mid(b, d);
+      const cd = mid(c, d);
+      // 4 corner tetras + 4 from octahedron split along diagonal ab–cd.
+      return [
+        [a, ab, ac, ad],
+        [b, ab, bc, bd],
+        [c, ac, bc, cd],
+        [d, ad, bd, cd],
+        [ab, ac, ad, cd],
+        [ab, ad, bd, cd],
+        [ab, bd, bc, cd],
+        [ab, bc, ac, cd],
+      ];
+    };
+
+    let tets: Tet[] = [[V[0], V[1], V[2], V[3]]];
+    // 3 levels → 512 small tetras; tip band (vol ≈ 1%) gets several pieces each.
+    for (let level = 0; level < 3; level++) tets = tets.flatMap(subdivide);
+
+    const material = new THREE.MeshStandardMaterial({
+      color: 0x8b929c,
+      roughness: 0.85,
+      metalness: 0.0,
+      flatShading: true,
+      polygonOffset: true,
+      polygonOffsetFactor: 2,
+      polygonOffsetUnits: 2,
+    });
+
+    const tetGeometry = (a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3, d: THREE.Vector3) => {
+      const centroid = a.clone().add(b).add(c).add(d).multiplyScalar(0.25);
+      const pushFace = (p: THREE.Vector3, q: THREE.Vector3, r: THREE.Vector3, out: THREE.Vector3[]) => {
+        const n = new THREE.Vector3().crossVectors(q.clone().sub(p), r.clone().sub(p));
+        if (n.dot(p.clone().sub(centroid)) < 0) {
+          out.push(p, r, q);
+        } else {
+          out.push(p, q, r);
+        }
+      };
+      const verts: THREE.Vector3[] = [];
+      pushFace(a, b, c, verts);
+      pushFace(a, b, d, verts);
+      pushFace(a, c, d, verts);
+      pushFace(b, c, d, verts);
+      const geo = new THREE.BufferGeometry().setFromPoints(verts);
+      geo.setIndex([0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11]);
+      geo.computeVertexNormals();
+      return geo;
+    };
+
+    for (const [a, b, c, d] of tets) {
+      const centroid = a.clone().add(b).add(c).add(d).multiplyScalar(0.25);
+      const mesh = new THREE.Mesh(tetGeometry(a, b, c, d), material);
+      mesh.renderOrder = -1;
+      mesh.userData.coreCentroidLocal = centroid.clone();
+      this.group.add(mesh);
+      this.corePieces.push({ mesh, initialMatrix: new THREE.Matrix4() });
+    }
+  }
+
+  private coreWorldCenter(mesh: THREE.Mesh, target = new THREE.Vector3()): THREE.Vector3 {
+    const local = mesh.userData.coreCentroidLocal as THREE.Vector3 | undefined;
+    if (local) return target.copy(local).applyMatrix4(mesh.matrixWorld);
+    // Fallback: average geometry positions.
+    const attr = mesh.geometry.getAttribute('position');
+    target.set(0, 0, 0);
+    for (let i = 0; i < attr.count; i++) {
+      target.add(new THREE.Vector3().fromBufferAttribute(attr as THREE.BufferAttribute, i));
+    }
+    return target.multiplyScalar(1 / Math.max(1, attr.count)).applyMatrix4(mesh.matrixWorld);
+  }
+
+  /**
+   * Core bands match facelet thresholds on the tip axis (world centroids):
+   *   tip    d > TIP_THRESH
+   *   deep   DEEP_THRESH < d ≤ TIP_THRESH
+   *   bottom d ≤ DEEP_THRESH
+   */
+  protected selectCore(move: FaceTurnMove): THREE.Object3D[] {
+    this.group.updateMatrixWorld(true);
+    const axis = this.faceOf(move.face).axis;
+    const scratch = this.scratch;
+    if (move.bottom) {
+      return this.corePieces
+        .filter((cp) => this.coreWorldCenter(cp.mesh, scratch).dot(axis) <= DEEP_THRESH)
+        .map((cp) => cp.mesh);
+    }
+    if (move.tip) {
+      return this.corePieces
+        .filter((cp) => this.coreWorldCenter(cp.mesh, scratch).dot(axis) > TIP_THRESH)
+        .map((cp) => cp.mesh);
+    }
+    return this.corePieces
+      .filter((cp) => {
+        const d = this.coreWorldCenter(cp.mesh, scratch).dot(axis);
+        return d > DEEP_THRESH && d <= TIP_THRESH;
+      })
+      .map((cp) => cp.mesh);
+  }
+
+    protected selectLayer(move: FaceTurnMove): PolyTile[] {
     this.group.updateMatrixWorld(true);
     const axis = this.faceOf(move.face).axis;
     if (move.bottom) {
