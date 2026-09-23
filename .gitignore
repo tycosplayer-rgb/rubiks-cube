@@ -3,3 +3,8 @@ dist
 .DS_Store
 *.local
 .netlify
+assets
+favicon.svg
+icons.svg
+index.html
+ref-megaminx-*.jpg

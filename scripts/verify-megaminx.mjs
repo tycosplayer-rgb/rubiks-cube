@@ -252,7 +252,7 @@ function layerFacesForPiece(pieceId) {
   const faces = [];
   for (const f of m['faces']) {
     const tiles = m['megaTiles'].filter((t) => t.pieceId === pieceId);
-    if (tiles.some((t) => m['tileWorldCenter'](t).dot(f.axis) > 2.0)) faces.push(f.id);
+    if (tiles.some((t) => m['tileWorldCenter'](t).dot(f.axis) > 2.12)) faces.push(f.id);
   }
   return faces;
 }
@@ -455,7 +455,7 @@ m.reset();
 const dragScoringOk = assertDragScoring();
 
 
-// --- Order smoke: N=2 and N=7 ---
+// --- Order smoke: N=2,4,5,6,7 (N=3 covered by full regression above) ---
 function smokeMegaOrder(N) {
   const q = new Megaminx(N, 'sticker');
   const vv = q.debugVerifyLayers();
@@ -490,9 +490,14 @@ function smokeMegaOrder(N) {
   let rt = 0;
   const a = getCenters();
   for (let i = 0; i < b.length; i++) rt = Math.max(rt, b[i].distanceTo(a[i]));
+
+  // Face counts must match on every face
+  const faceOk = q['faces'].every((f) => q.stickersOnFace(f.id).length === expected);
+
   const ok =
     vv.order === N &&
     vv.perFace === expected &&
+    faceOk &&
     vv.perFace > 0 &&
     nLayer === layer.length &&
     layer.length > 0 &&
@@ -500,10 +505,25 @@ function smokeMegaOrder(N) {
     vv.fiveTurnClosed &&
     vv.pieceGraphOk &&
     rt < 0.05;
-  console.log('smokeMega', N, { perFace: vv.perFace, expected, layer: layer.length, rt, ok });
+  console.log('smokeMega', N, {
+    perFace: vv.perFace,
+    expected,
+    layer: layer.length,
+    centers: vv.centers,
+    edges: vv.edges,
+    corners: vv.corners,
+    rings: vv.rings,
+    pieceGraphOk: vv.pieceGraphOk,
+    faceOk,
+    rt,
+    ok,
+  });
   return ok;
 }
 const smokeMega2 = smokeMegaOrder(2);
+const smokeMega4 = smokeMegaOrder(4);
+const smokeMega5 = smokeMegaOrder(5);
+const smokeMega6 = smokeMegaOrder(6);
 const smokeMega7 = smokeMegaOrder(7);
 
 const pass =
@@ -531,6 +551,9 @@ const pass =
   staleTrapOk &&
   dragScoringOk &&
   smokeMega2 &&
+  smokeMega4 &&
+  smokeMega5 &&
+  smokeMega6 &&
   smokeMega7;
 
 console.log({
