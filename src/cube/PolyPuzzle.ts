@@ -43,11 +43,22 @@ export abstract class PolyPuzzle implements Puzzle {
   private turnAnim: {
     move: FaceTurnMove;
     selected: PolyTile[];
+    /** Angle at animation start (continuous-drag snap). */
+    from: number;
     target: number;
     started: number;
     duration: number;
     record: boolean;
+    easing: 'inout' | 'outCubic';
     resolve: () => void;
+  } | null = null;
+  /** True while pointer is actively twisting a layer (before snap). */
+  protected dragging = false;
+  private interactive: {
+    move: FaceTurnMove;
+    selected: PolyTile[];
+    axis: THREE.Vector3;
+    angle: number;
   } | null = null;
   private readonly _world = new THREE.Matrix4();
   private readonly _local = new THREE.Matrix4();
@@ -87,7 +98,7 @@ export abstract class PolyPuzzle implements Puzzle {
   }
 
   isBusy(): boolean {
-    return this.busy || this.locked;
+    return this.busy || this.locked || this.dragging;
   }
 
   setSpeed(mult: number): void {
@@ -140,8 +151,14 @@ export abstract class PolyPuzzle implements Puzzle {
     const a = this.turnAnim;
     if (!a) return;
     const t = Math.min(1, (nowMs - a.started) / a.duration);
-    const eased = t < 0.5 ? 2 * t * t : 1 - Math.pow(-2 * t + 2, 2) / 2;
-    this.pivot.setRotationFromAxisAngle(this.faceOf(a.move.face).axis, a.target * eased);
+    const eased =
+      a.easing === 'outCubic'
+        ? 1 - Math.pow(1 - t, 3)
+        : t < 0.5
+          ? 2 * t * t
+          : 1 - Math.pow(-2 * t + 2, 2) / 2;
+    const angle = a.from + (a.target - a.from) * eased;
+    this.pivot.setRotationFromAxisAngle(this.faceOf(a.move.face).axis, angle);
     if (t < 1) return;
     this.pivot.setRotationFromAxisAngle(this.faceOf(a.move.face).axis, a.target);
     this.group.updateMatrixWorld(true);
@@ -161,7 +178,9 @@ export abstract class PolyPuzzle implements Puzzle {
 
   async applyMove(move: AnyMove, record = true): Promise<void> {
     if (!isFaceTurnMove(move) || !this.faces.some((f) => f.id === move.face)) return;
-    while (this.busy) await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    while (this.busy || this.dragging || this.interactive) {
+      await new Promise<void>((r) => requestAnimationFrame(() => r()));
+    }
     return new Promise<void>((resolve) => {
       const selected = this.selectLayer(move);
       if (!selected.length) {
@@ -177,8 +196,10 @@ export abstract class PolyPuzzle implements Puzzle {
       this.turnAnim = {
         move: { ...move },
         selected,
+        from: 0,
         target: this.turnAngle(move),
         record,
+        easing: 'inout',
         resolve,
         started: performance.now(),
         duration: 330 / this.speed,
@@ -186,11 +207,114 @@ export abstract class PolyPuzzle implements Puzzle {
     });
   }
 
-  protected styleScale(): number {
+  /**
+   * Start an interactive (pointer-followed) layer turn.
+   * Reparents the layer into the pivot; call setInteractiveAngle each move.
+   */
+  beginInteractiveTurn(skeleton: {
+    face: string;
+    tip?: boolean;
+    bottom?: boolean;
+  }): boolean {
+    if (this.busy || this.locked || this.dragging || this.turnAnim || this.interactive) return false;
+    if (!this.faces.some((f) => f.id === skeleton.face)) return false;
+    const move: FaceTurnMove = {
+      kind: 'face',
+      face: skeleton.face,
+      steps: 0,
+      ...(skeleton.tip ? { tip: true } : {}),
+      ...(skeleton.bottom ? { bottom: true } : {}),
+    };
+    const selected = this.selectLayer(move);
+    if (!selected.length) return false;
+    this.dragging = true;
+    this.emit({ type: 'busy', busy: true });
+    this.pivot.rotation.set(0, 0, 0);
+    this.pivot.scale.set(1, 1, 1);
+    for (const tile of selected) this.reparentUniform(tile.mesh, this.pivot);
+    this.setCoreTurnSafe(true);
+    this.interactive = {
+      move,
+      selected,
+      axis: this.faceOf(move.face).axis.clone(),
+      angle: 0,
+    };
+    return true;
+  }
+
+  setInteractiveAngle(radians: number): void {
+    if (!this.interactive) return;
+    this.interactive.angle = radians;
+    this.pivot.setRotationFromAxisAngle(this.interactive.axis, radians);
+  }
+
+  getInteractiveAngle(): number {
+    return this.interactive?.angle ?? 0;
+  }
+
+  /** Snap/animate to commitSteps * turnAngle, bake history if steps ≠ 0. */
+  finishInteractiveTurn(commitSteps: number): Promise<void> {
+    const state = this.interactive;
+    if (!state) return Promise.resolve();
+    this.interactive = null;
+    this.dragging = false;
+    const move: FaceTurnMove = {
+      ...state.move,
+      steps: commitSteps,
+    };
+    const target = commitSteps === 0 ? 0 : this.turnAngle(move);
+    const from = state.angle;
+    // Already at target (rare) — bake immediately.
+    if (Math.abs(from - target) < 1e-5) {
+      this.pivot.setRotationFromAxisAngle(state.axis, target);
+      this.group.updateMatrixWorld(true);
+      for (const tile of state.selected) this.reparentUniform(tile.mesh, this.group);
+      this.pivot.rotation.set(0, 0, 0);
+      this.pivot.scale.set(1, 1, 1);
+      this.setCoreTurnSafe(false);
+      if (commitSteps !== 0) {
+        this.history.push({ ...move });
+        this.emit({ type: 'move', notation: this.notation(move), historyLen: this.history.length });
+      }
+      if (!this.locked) this.emit({ type: 'busy', busy: false });
+      return Promise.resolve();
+    }
+    this.busy = true;
+    return new Promise<void>((resolve) => {
+      this.turnAnim = {
+        move,
+        selected: state.selected,
+        from,
+        target,
+        record: commitSteps !== 0,
+        easing: 'outCubic',
+        resolve,
+        started: performance.now(),
+        duration: 240 / this.speed,
+      };
+    });
+  }
+
+  /** Abort interactive turn: restore angle 0, no history. */
+  cancelInteractiveTurn(): void {
+    const state = this.interactive;
+    if (!state) return;
+    this.interactive = null;
+    this.dragging = false;
+    this.pivot.setRotationFromAxisAngle(state.axis, 0);
+    this.group.updateMatrixWorld(true);
+    for (const tile of state.selected) this.reparentUniform(tile.mesh, this.group);
+    this.pivot.rotation.set(0, 0, 0);
+    this.pivot.scale.set(1, 1, 1);
+    this.setCoreTurnSafe(false);
+    if (!this.busy && !this.locked) this.emit({ type: 'busy', busy: false });
+  }
+
+    protected styleScale(): number {
     return this.style === 'sticker' ? 1 : 1.03;
   }
 
-  private reparentUniform(object: THREE.Object3D, newParent: THREE.Object3D): void {
+  protected reparentUniform(object: THREE.Object3D, newParent: THREE.Object3D): void {
     object.updateWorldMatrix(true, false);
     newParent.updateWorldMatrix(true, false);
     this._world.copy(object.matrixWorld);
@@ -387,6 +511,7 @@ export abstract class PolyPuzzle implements Puzzle {
 
   dispose(): void {
     this.stop();
+    if (this.interactive) this.cancelInteractiveTurn();
     if (this.turnAnim) {
       const r = this.turnAnim.resolve;
       this.turnAnim = null;

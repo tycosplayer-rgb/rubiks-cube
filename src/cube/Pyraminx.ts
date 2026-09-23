@@ -1,6 +1,12 @@
 import * as THREE from 'three';
 import { PolyPuzzle, type PolyFace, type PolyTile } from './PolyPuzzle';
-import type { FaceButton, FaceTurnMove, VisualStyle } from './puzzle';
+import type {
+  FaceButton,
+  FaceTurnMove,
+  LayerDragSession,
+  PuzzlePick,
+  VisualStyle,
+} from './puzzle';
 
 const COLORS = [0xffd500, 0x009e60, 0xc41e3a, 0x0051ba];
 const CSS = ['#FFD500', '#009E60', '#C41E3A', '#0051BA'];
@@ -38,6 +44,17 @@ export class Pyraminx extends PolyPuzzle {
   readonly puzzleType = 'pyraminx' as const;
   private readonly scratch = new THREE.Vector3();
   private readonly pyraTiles: PyraTile[] = [];
+  /** Geometric 1:1 angle tracking for continuous layer drag. */
+  private layerDragGeom: {
+    session: LayerDragSession;
+    u: THREE.Vector3;
+    v: THREE.Vector3;
+    axis: THREE.Vector3;
+    lastAtan: number;
+    angle: number;
+    raycaster: THREE.Raycaster;
+    ndc: THREE.Vector2;
+  } | null = null;
 
   constructor(style: VisualStyle = 'sticker') {
     super(style);
@@ -153,6 +170,221 @@ export class Pyraminx extends PolyPuzzle {
   }
 
   /**
+   * Lock tip / deep / bottom band + tip axis from a hit (no screen delta needed).
+   * Same rules as dragToMove layer detection; world tip resolve; no swipe scoring.
+   */
+  resolveLayerAtHit(
+    mesh: THREE.Mesh,
+    point: THREE.Vector3,
+    normal: THREE.Vector3,
+    camera: THREE.Camera,
+  ): { face: string; tip?: boolean; bottom?: boolean } | null {
+    this.group.updateMatrixWorld(true);
+
+    const tipPiece = Number(mesh.userData.tipPiece ?? -1);
+    const faceIndex = Number(mesh.userData.faceIndex ?? -1);
+    const camPos = camera.position;
+
+    type Mode = 'tip' | 'deep' | 'bottom';
+    let chosen: PolyFace | null = null;
+    let mode: Mode = 'deep';
+
+    let tipByPos: PolyFace | null = null;
+    let tipDot = TIP_THRESH;
+    for (const f of this.faces) {
+      const d = point.dot(f.axis);
+      if (d > tipDot) {
+        tipDot = d;
+        tipByPos = f;
+      }
+    }
+    if (tipByPos) {
+      if (tipPiece >= 0 && tipPiece < this.faces.length) {
+        const hinted = this.faces[tipPiece];
+        if (hinted.id === tipByPos.id && point.dot(hinted.axis) > TIP_THRESH) {
+          chosen = hinted;
+        } else {
+          chosen = tipByPos;
+        }
+      } else {
+        chosen = tipByPos;
+      }
+      mode = 'tip';
+    } else {
+      if (faceIndex >= 0 && faceIndex < this.faces.length) {
+        const opp = this.faces[faceIndex];
+        const align = camPos.dot(opp.axis);
+        const viewingOpp =
+          align < 0 &&
+          this.faces.every(
+            (f, i) => i === faceIndex || camPos.dot(f.axis) > align + 1e-6,
+          );
+        if (viewingOpp) {
+          chosen = opp;
+          mode = 'bottom';
+        }
+      }
+
+      if (!chosen) {
+        let up: PolyFace | null = null;
+        let upDot = -Infinity;
+        let unique = false;
+        for (const f of this.faces) {
+          const d = camPos.dot(f.axis);
+          if (d > upDot + 1e-6) {
+            upDot = d;
+            up = f;
+            unique = true;
+          } else if (Math.abs(d - upDot) <= 1e-6) {
+            unique = false;
+          }
+        }
+        if (up && unique && point.dot(up.axis) <= DEEP_THRESH) {
+          chosen = up;
+          mode = 'bottom';
+        }
+      }
+
+      if (!chosen) {
+        const candidates: PolyFace[] = [];
+        for (const f of this.faces) {
+          const d = point.dot(f.axis);
+          if (d > DEEP_THRESH && d <= TIP_THRESH) candidates.push(f);
+        }
+        const resolved = this.resolveHitFace(point, normal);
+        if (resolved && !candidates.some((c) => c.id === resolved.id)) {
+          candidates.push(resolved);
+        }
+        if (!candidates.length) return null;
+        // Prefer resolved face if mid-band; else highest projection.
+        if (resolved && candidates.some((c) => c.id === resolved.id)) {
+          chosen = resolved;
+        } else {
+          chosen = candidates[0];
+          let best = point.dot(chosen.axis);
+          for (const f of candidates) {
+            const d = point.dot(f.axis);
+            if (d > best) {
+              best = d;
+              chosen = f;
+            }
+          }
+        }
+        mode = 'deep';
+      }
+    }
+
+    if (!chosen) return null;
+    if (mesh.userData) mesh.userData.turnFace = chosen.id;
+    return {
+      face: chosen.id,
+      ...(mode === 'tip' ? { tip: true } : mode === 'bottom' ? { bottom: true } : {}),
+    };
+  }
+
+  beginLayerDrag(pick: PuzzlePick, camera: THREE.Camera): LayerDragSession | null {
+    if (this.isBusy()) return null;
+    const layer = this.resolveLayerAtHit(pick.mesh, pick.point, pick.faceNormal, camera);
+    if (!layer) return null;
+    if (!this.beginInteractiveTurn(layer)) return null;
+
+    const axis = this.faceOf(layer.face).axis.clone();
+    // Orthonormal basis in plane ⊥ tip axis; u along lever arm at hit.
+    const radial = pick.point.clone().addScaledVector(axis, -pick.point.dot(axis));
+    const u = new THREE.Vector3();
+    if (radial.lengthSq() > 1e-8) {
+      u.copy(radial).normalize();
+    } else {
+      // Hit near axis: fall back using camera-facing direction in the plane.
+      const view = camera.position.clone().sub(pick.point);
+      u.crossVectors(axis, view);
+      if (u.lengthSq() < 1e-8) u.set(1, 0, 0).cross(axis);
+      if (u.lengthSq() < 1e-8) u.set(0, 1, 0).cross(axis);
+      u.normalize();
+    }
+    const v = new THREE.Vector3().crossVectors(axis, u).normalize();
+    const startAtan = Math.atan2(radial.dot(v), radial.dot(u));
+
+    const session: LayerDragSession = {
+      face: layer.face,
+      ...(layer.tip ? { tip: true } : {}),
+      ...(layer.bottom ? { bottom: true } : {}),
+    };
+    this.layerDragGeom = {
+      session,
+      u,
+      v,
+      axis,
+      lastAtan: startAtan,
+      angle: 0,
+      raycaster: new THREE.Raycaster(),
+      ndc: new THREE.Vector2(),
+    };
+    return session;
+  }
+
+  updateLayerDrag(
+    session: LayerDragSession,
+    ndcX: number,
+    ndcY: number,
+    camera: THREE.Camera,
+  ): void {
+    const g = this.layerDragGeom;
+    if (!g || g.session !== session) return;
+
+    g.ndc.set(ndcX, ndcY);
+    g.raycaster.setFromCamera(g.ndc, camera);
+    const ray = g.raycaster.ray;
+    // Plane through origin with normal = tip axis (axes pass through origin).
+    const denom = ray.direction.dot(g.axis);
+    if (Math.abs(denom) < 1e-10) return;
+    const t = -ray.origin.dot(g.axis) / denom;
+    const hit = ray.origin.clone().addScaledVector(ray.direction, t);
+    const x = hit.dot(g.u);
+    const y = hit.dot(g.v);
+    if (x * x + y * y < 1e-12) return;
+    const atan = Math.atan2(y, x);
+    let delta = atan - g.lastAtan;
+    if (delta > Math.PI) delta -= Math.PI * 2;
+    if (delta < -Math.PI) delta += Math.PI * 2;
+    g.lastAtan = atan;
+    g.angle += delta;
+    this.setInteractiveAngle(g.angle);
+  }
+
+  async endLayerDrag(session: LayerDragSession): Promise<void> {
+    const g = this.layerDragGeom;
+    if (!g || g.session !== session) {
+      this.cancelInteractiveTurn();
+      this.layerDragGeom = null;
+      return;
+    }
+    // Prefer live interactive angle (geom.angle tracks the same value during pointer moves).
+    const angle = this.getInteractiveAngle();
+    this.layerDragGeom = null;
+
+    const step = (Math.PI * 2) / 3;
+    const SNAP = Math.PI / 6; // 30°
+    let steps = Math.round(angle / step);
+    if (Math.abs(angle) < SNAP) {
+      steps = 0;
+    } else if (steps === 0) {
+      steps = angle > 0 ? 1 : -1;
+    }
+    while (steps > 2) steps -= 3;
+    while (steps < -2) steps += 3;
+
+    await this.finishInteractiveTurn(steps);
+  }
+
+  cancelLayerDrag(session: LayerDragSession): void {
+    if (this.layerDragGeom && this.layerDragGeom.session === session) {
+      this.layerDragGeom = null;
+    }
+    this.cancelInteractiveTurn();
+  }
+
+    /**
    * Swipe → tip-axis turn with tip / deep / bottom (尖 / 层 / 底).
    *
    *   1. Tip under finger by **current world position** (authoritative):

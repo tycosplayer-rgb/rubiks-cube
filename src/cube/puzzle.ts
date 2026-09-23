@@ -79,4 +79,21 @@ export interface Puzzle {
   getFloorY(): number;
   /** Optional labeled face-turn buttons. */
   getFaceButtons(): FaceButton[];
+
+  /**
+   * Optional continuous layer-drag (Pyraminx). When present, controls use
+   * begin/update/end instead of discrete dragToMove → applyMove.
+   */
+  beginLayerDrag?(pick: PuzzlePick, camera: THREE.Camera): LayerDragSession | null;
+  /** ndcX/ndcY are Three.js NDC (−1…1); controls convert from client coords. */
+  updateLayerDrag?(session: LayerDragSession, ndcX: number, ndcY: number, camera: THREE.Camera): void;
+  endLayerDrag?(session: LayerDragSession): Promise<void>;
+  cancelLayerDrag?(session: LayerDragSession): void;
+}
+
+/** Opaque handle for an in-progress continuous layer twist. */
+export interface LayerDragSession {
+  readonly face: string;
+  readonly tip?: boolean;
+  readonly bottom?: boolean;
 }

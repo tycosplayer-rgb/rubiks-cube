@@ -335,6 +335,127 @@ const postBottomTipOk =
   postBottomTipSwipe.face === lFace.id &&
   !postBottomTipSwipe.bottom;
 
+// --- Continuous layer drag: begin / angle follow / snap quantize ---
+p.reset();
+const contCam = makeCam(uFace.axis.clone().multiplyScalar(8));
+
+// Tip begin locks tip band
+const contPick = {
+  mesh: uTipTile.mesh,
+  point: uTipPt.clone(),
+  faceNormal: uFace.axis.clone(),
+  faceId: uFace.id,
+};
+const contSession = p.beginLayerDrag(contPick, contCam);
+const contBegan =
+  !!contSession &&
+  contSession.face === 'U' &&
+  contSession.tip === true &&
+  !contSession.bottom &&
+  p.isBusy();
+
+// Drive angle directly (geometry of tip hit is near-axis); snap ≥30° → +1
+const tipBaseline = centers();
+p.setInteractiveAngle((Math.PI * 2) / 3 * 0.55); // ~66°
+const angleForced = p.getInteractiveAngle();
+{
+  const endP = p.endLayerDrag(contSession);
+  // Drive from turnAnim.started so duration elapses reliably
+  const started = p['turnAnim']?.started ?? performance.now();
+  for (let i = 0; i <= 30; i++) {
+    p.update(started + i * 20);
+    if (!p.isBusy() && !p['turnAnim']) break;
+  }
+  await endP;
+}
+const snapMoved = maxDist(tipBaseline, centers()) > 0.3;
+const histOk = p.getHistoryLength() === 1;
+
+// Mid-band: geometric 1:1 follow via projected arc on ⊥ plane
+p.reset();
+const midPick = {
+  mesh: uMidTile.mesh,
+  point: uMidPt.clone(),
+  faceNormal: uFace.axis.clone(),
+  faceId: uFace.id,
+};
+const midSess = p.beginLayerDrag(midPick, contCam);
+const midContOk =
+  !!midSess && !midSess.tip && !midSess.bottom && midSess.face === 'U';
+let followOk = false;
+let angleAfter = 0;
+if (midSess) {
+  const startNdc = uMidPt.clone().project(contCam);
+  p.updateLayerDrag(midSess, startNdc.x, startNdc.y, contCam);
+  for (let i = 1; i <= 12; i++) {
+    const a = (i / 12) * (Math.PI / 2);
+    const q = new THREE.Quaternion().setFromAxisAngle(uFace.axis, a);
+    const pt = uMidPt.clone().applyQuaternion(q);
+    const ndc = pt.project(contCam);
+    p.updateLayerDrag(midSess, ndc.x, ndc.y, contCam);
+  }
+  angleAfter = p.getInteractiveAngle();
+  // Expect roughly +90° follow (tolerance for perspective)
+  followOk = angleAfter > 0.6 && angleAfter < 2.0;
+  p.cancelLayerDrag(midSess);
+} else {
+  followOk = false;
+}
+
+// Small angle → home, no history
+p.reset();
+const homeBaseline = centers();
+const homeSess = p.beginLayerDrag(midPick, contCam);
+let homeOk = false;
+if (homeSess) {
+  p.setInteractiveAngle(Math.PI / 18); // 10°
+  const tinyAngle = Math.abs(p.getInteractiveAngle());
+  {
+    const endP = p.endLayerDrag(homeSess);
+    const started = p['turnAnim']?.started ?? performance.now();
+    for (let i = 0; i <= 30; i++) {
+      p.update(started + i * 20);
+      if (!p.isBusy() && !p['turnAnim']) break;
+    }
+    await endP;
+  }
+  homeOk =
+    maxDist(homeBaseline, centers()) < 0.05 &&
+    p.getHistoryLength() === 0 &&
+    tinyAngle < Math.PI / 6;
+}
+
+// Cancel path restores without history
+p.reset();
+p.reset();
+const cancelBaseline = centers();
+const cancelSess2 = p.beginLayerDrag(midPick, contCam);
+p.setInteractiveAngle(0.7);
+p.cancelLayerDrag(cancelSess2);
+const cancelRestored = maxDist(cancelBaseline, centers()) < 0.05 && !p.isBusy();
+
+const continuousOk =
+  contBegan &&
+  angleForced > 0.5 &&
+  snapMoved &&
+  histOk &&
+  midContOk &&
+  followOk &&
+  homeOk &&
+  cancelRestored;
+console.log({
+  contBegan,
+  angleForced,
+  snapMoved,
+  histOk,
+  midContOk,
+  angleAfter,
+  followOk,
+  homeOk,
+  cancelRestored,
+  continuousOk,
+});
+
 const tipButtons = p.getFaceButtons().filter((b) => b.tip);
 const bottomButtons = p.getFaceButtons().filter((b) => b.bottom);
 const faceIds = new Set(faces.map((f) => f.id));
@@ -381,7 +502,8 @@ const pass =
   postBottomTipOk &&
   bottomCarriesBaseTips &&
   tipButtonsOk2 &&
-  bottomButtonsOk;
+  bottomButtonsOk &&
+  continuousOk;
 
 console.log({
   nDeep,
