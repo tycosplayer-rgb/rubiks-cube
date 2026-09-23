@@ -10,7 +10,7 @@
 
 | 入口 | URL | 说明 |
 |------|-----|------|
-| **推荐（非 github.io）** | https://upq98z-ip-100-63-197-102.tunnelmole.net/ | Tunnelmole HTTPS；当前 box 在线时可用 |
+| **推荐（非 github.io）** | https://ecmdod-ip-44-207-134-103.tunnelmole.net/ | Tunnelmole HTTPS；当前 box 在线时可用 |
 | GitHub Pages | https://tycosplayer-rgb.github.io/rubiks-cube/ | 可能在中国大陆打不开 |
 | 仓库 | https://github.com/tycosplayer-rgb/rubiks-cube | 源码 |
 
