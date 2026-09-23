@@ -144,8 +144,20 @@ function loadVisualStyle(): VisualStyle {
   return 'sticker';
 }
 function saveVisualStyle(style: VisualStyle): void { try { localStorage.setItem(STYLE_STORAGE_KEY, style); } catch { /* ignore */ } }
+const PUZZLE_TYPE_STORAGE_KEY = 'rubiks-puzzle-type';
+function loadPuzzleType(): PuzzleType {
+  try {
+    const v = localStorage.getItem(PUZZLE_TYPE_STORAGE_KEY);
+    if (v === 'cube' || v === 'pyraminx' || v === 'megaminx') return v;
+  } catch { /* ignore */ }
+  return 'cube';
+}
+function savePuzzleType(type: PuzzleType): void {
+  try { localStorage.setItem(PUZZLE_TYPE_STORAGE_KEY, type); } catch { /* ignore */ }
+}
 let visualStyle = loadVisualStyle();
-let currentType: PuzzleType = 'cube';
+let currentType = loadPuzzleType();
+typeSel.value = currentType;
 let currentOrder = 3;
 function createPuzzle(type: PuzzleType): Puzzle {
   if (type === 'pyraminx') return new Pyraminx(visualStyle);
@@ -240,6 +252,7 @@ function switchPuzzle(type: PuzzleType): void {
   puzzle.stop();
   puzzle.dispose();
   currentType = type;
+  savePuzzleType(type);
   puzzle = createPuzzle(type);
   puzzle.setSpeed(Number(speedInp.value));
   puzzle.setCastShadows(useShadows);
