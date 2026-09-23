@@ -464,9 +464,17 @@ export class RubiksCube implements Puzzle {
     const step = CUBIE_SIZE + GAP;
     const half = (this.order - 1) / 2;
     const p = c.mesh.position;
-    p.x = Math.round(p.x / step) * step;
-    p.y = Math.round(p.y / step) * step;
-    p.z = Math.round(p.z / step) * step;
+    const N = this.order;
+
+    // Round indices first, then write positions from indices.
+    // Even-order centers sit on half-integer multiples of step (e.g. ±0.5, ±1.5);
+    // Math.round(p/step)*step is wrong because JS Math.round(-0.5) === 0.
+    c.ix = Math.max(0, Math.min(N - 1, Math.round(p.x / step + half)));
+    c.iy = Math.max(0, Math.min(N - 1, Math.round(p.y / step + half)));
+    c.iz = Math.max(0, Math.min(N - 1, Math.round(p.z / step + half)));
+    p.x = (c.ix - half) * step;
+    p.y = (c.iy - half) * step;
+    p.z = (c.iz - half) * step;
 
     // Always keep cubie scale uniform — attach/decompose must never leave sticks.
     c.mesh.scale.set(1, 1, 1);
@@ -507,10 +515,6 @@ export class RubiksCube implements Puzzle {
     this._rotMat.makeBasis(sx, sy, this._vz);
     c.mesh.quaternion.setFromRotationMatrix(this._rotMat);
     c.mesh.updateMatrix();
-
-    c.ix = Math.round(p.x / step + half);
-    c.iy = Math.round(p.y / step + half);
-    c.iz = Math.round(p.z / step + half);
   }
 
   private rotateIndices(c: Cubie, axis: Axis, turns: number): void {

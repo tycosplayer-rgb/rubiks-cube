@@ -8,7 +8,8 @@
     "build": "tsc && vite build",
     "preview": "vite preview",
     "verify:pyraminx": "npx tsx scripts/verify-pyraminx.mjs",
-    "verify:megaminx": "npx tsx scripts/verify-megaminx.mjs"
+    "verify:megaminx": "npx tsx scripts/verify-megaminx.mjs",
+    "verify:cube-even": "npx tsx scripts/verify-cube-even.mjs"
   },
   "devDependencies": {
     "@types/three": "^0.186.0",
