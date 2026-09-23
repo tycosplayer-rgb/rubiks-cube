@@ -9,14 +9,13 @@ const IDS = ['U', 'L', 'R', 'B'];
 /**
  * Facelet projections along a tip axis (solved, |vertex|=2.7) cluster at:
  *   ~1.92 tip (3) · ~1.12 axial wedges (3) · ~0.72 edge band (6)
- *   · ~-0.08 / ~-0.48 / ~-0.96 far / base
+ *   · ~-0.08 / ~-0.48 / ~-0.96 far / base (incl. other tips at d ≈ -1/3)
  * Tip / 尖 = tip only (3): d > TIP_THRESH.
  * Deep / 层 = mid-band excluding tip (9): DEEP_THRESH < d ≤ TIP_THRESH.
- * Bottom / 底 = far cap about that tip, excluding ALL tip-band stickers (15):
- *   d ≤ DEEP_THRESH AND not (dot(any tip axis) > TIP_THRESH).
- * A real Pyraminx never moves tips except about their own tip axis; bottom
- * must not carry foreign tip stickers (which sit at d_T ≈ -1/3 ≤ DEEP_THRESH).
- * Tip, mid, and bottom are independent C3-closed bands about each tip axis.
+ * Bottom / 底 = far band + 底座三角 (24): d ≤ DEEP_THRESH.
+ *   Includes the three other tips' tip stickers (base corners when T is up);
+ *   tip T's own stickers stay out (d_T ≈ 1.92). Bottom about T cycles those
+ *   three base corners. Tip and deep stay independent; tip swipe uses world pos.
  */
 const TIP_THRESH = 1.5;
 const DEEP_THRESH = 0.4;
@@ -319,23 +318,14 @@ export class Pyraminx extends PolyPuzzle {
     };
   }
 
-  /** True if this world point currently sits in any tip band. */
-  private isAnyTipBand(center: THREE.Vector3): boolean {
-    for (const f of this.faces) {
-      if (center.dot(f.axis) > TIP_THRESH) return true;
-    }
-    return false;
-  }
-
   protected selectLayer(move: FaceTurnMove): PolyTile[] {
     this.group.updateMatrixWorld(true);
     const axis = this.faceOf(move.face).axis;
     if (move.bottom) {
-      // Bottom / 底: far cap about this tip, never carrying tip stickers of any tip.
-      return this.tiles.filter((tile) => {
-        const center = this.tileWorldCenter(tile, this.scratch).clone();
-        return center.dot(axis) <= DEEP_THRESH && !this.isAnyTipBand(center);
-      });
+      // Bottom / 底: far band + 底座三角 (other three tips' stickers cycle with it).
+      return this.tiles.filter(
+        (tile) => this.tileWorldCenter(tile, this.scratch).dot(axis) <= DEEP_THRESH,
+      );
     }
     if (move.tip) {
       // Tip / 尖: only the 3 facelets at that vertex.
@@ -360,7 +350,7 @@ export class Pyraminx extends PolyPuzzle {
 
   /**
    * Scramble: mostly deep mid-band; some tip (~12%); occasional bottom (~10%).
-   * Tip / deep / bottom stay independent about each tip axis.
+   * Tip and deep are independent; bottom about T may cycle the other three tips.
    */
   async scramble(): Promise<void> {
     if (this.isBusy()) return;
@@ -454,8 +444,7 @@ export class Pyraminx extends PolyPuzzle {
       return d > DEEP_THRESH && d <= TIP_THRESH;
     });
     const bottom = this.tiles.filter((t) => {
-      const center = this.tileWorldCenter(t, this.scratch).clone();
-      return center.dot(axis) <= DEEP_THRESH && !this.isAnyTipBand(center);
+      return this.tileWorldCenter(t, this.scratch).dot(axis) <= DEEP_THRESH;
     });
     const q = new THREE.Quaternion().setFromAxisAngle(axis, (Math.PI * 2) / 3);
     const closed = (sel: PolyTile[]) =>

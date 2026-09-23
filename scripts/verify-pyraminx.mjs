@@ -2,14 +2,13 @@
  * Headless Pyraminx layer checks (no WebGL).
  * Run: npx tsx scripts/verify-pyraminx.mjs
  *
- * Three independent bands about each tip axis:
- *   tip    = d > 1.5            → 3 facelets
+ * Three C3-closed bands about each tip axis T:
+ *   tip    = d > 1.5            → 3 facelets (tip T only)
  *   deep   = 0.4 < d ≤ 1.5      → 9 facelets (edges + axial; excludes tip)
- *   bottom = d ≤ 0.4 AND not on any tip band → 15 facelets (far cap; no tips)
+ *   bottom = d ≤ 0.4            → 24 facelets (far band + 底座三角 / other tips)
  *
- * dragToMove: tip under finger by current world position → { tip:true };
- *             opposite-face center → { bottom:true };
- *             mid-band sticker → deep (tip/bottom falsy).
+ * Bottom about T includes the three other tips' tip stickers (base corners) and
+ * cycles them; tip T itself stays put. Tip swipe uses current world projection.
  * After a bottom U turn, swipe on stickers now at tip L must return tip L (not U).
  */
 import { Pyraminx } from '../src/cube/Pyraminx.ts';
@@ -126,17 +125,24 @@ c = centers();
 const facesAll = p['faces'];
 const bottomIdx = [];
 c.forEach((pt, i) => {
+  if (pt.dot(axis) <= DEEP_THRESH) bottomIdx.push(i);
+});
+// Base tips (non-U tip bands): must move with bottom U.
+const baseTipIdx = [];
+c.forEach((pt, i) => {
   if (pt.dot(axis) > DEEP_THRESH) return;
-  if (facesAll.some((f) => pt.dot(f.axis) > TIP_THRESH)) return;
-  bottomIdx.push(i);
+  if (facesAll.some((f, fi) => fi !== 0 && pt.dot(f.axis) > TIP_THRESH)) baseTipIdx.push(i);
 });
 const bottomBefore = bottomIdx.map((i) => c[i].clone());
 const tipBefore2 = tipIdx.map((i) => c[i].clone());
 const midBefore2 = midIdx.map((i) => c[i].clone());
+const baseTipBefore = baseTipIdx.map((i) => c[i].clone());
 applyInstant('U', 1, { bottom: true });
 c = centers();
 const tipDriftFromBottom = Math.max(0, ...tipIdx.map((i, j) => tipBefore2[j].distanceTo(c[i])));
 const midDriftFromBottom = Math.max(0, ...midIdx.map((i, j) => midBefore2[j].distanceTo(c[i])));
+const baseTipDriftFromBottom = Math.min(...baseTipIdx.map((i, j) => baseTipBefore[j].distanceTo(c[i])));
+const baseTipsMoved = baseTipIdx.length === 9 && baseTipDriftFromBottom > 0.3;
 
 p.reset();
 c = centers();
@@ -296,16 +302,18 @@ const bDeepOk =
   bMidSel.length === 9 &&
   !bMidHitsTip;
 
-// --- After bottom U turn: tips stay put; bottom has zero tip-band stickers ---
+// --- After bottom U: carries 3×3 base tip stickers; U tip stays; world tip resolve ---
 p.reset();
 applyInstant('U', 1, { bottom: true });
 p.group.updateMatrixWorld(true);
 const bottomSel = p['selectLayer']({ kind: 'face', face: 'U', steps: 1, bottom: true });
-const bottomHasTip = bottomSel.some((t) => {
+const bottomBaseTipCount = bottomSel.filter((t) => {
   const pt = worldCenterOf(t);
-  return faces.some((f) => pt.dot(f.axis) > TIP_THRESH);
-});
-const bottomNoTips = bottomSel.length === 15 && !bottomHasTip;
+  return faces.some((f, fi) => fi !== 0 && pt.dot(f.axis) > TIP_THRESH);
+}).length;
+const bottomHasOwnTip = bottomSel.some((t) => worldCenterOf(t).dot(faces[0].axis) > TIP_THRESH);
+const bottomCarriesBaseTips =
+  bottomSel.length === 24 && bottomBaseTipCount === 9 && !bottomHasOwnTip;
 
 // Tip identity by current position: even with tipPiece deliberately stale (claims U),
 // a sticker sitting at tip L must swipe as tip L — not U.
@@ -336,7 +344,7 @@ const bottomButtonsOk = bottomButtons.length === 4 && bottomButtons.every((b) =>
 const pass =
   v.tipCount === 3 &&
   v.deepCount === 9 &&
-  v.bottomCount === 15 &&
+  v.bottomCount === 24 &&
   v.tipClosed &&
   v.deepClosed &&
   v.bottomClosed &&
@@ -347,7 +355,7 @@ const pass =
   v.bottomRoundTrip &&
   nDeep === 9 &&
   nTip === 3 &&
-  nBottom === 15 &&
+  nBottom === 24 &&
   roundTrip < 0.05 &&
   u3 < 0.05 &&
   tip3 < 0.05 &&
@@ -360,17 +368,18 @@ const pass =
   bottomDriftFromDeep < 0.05 &&
   tipIdx.length === 3 &&
   midIdx.length === 9 &&
-  bottomIdx.length === 15 &&
+  bottomIdx.length === 24 &&
+  baseTipsMoved &&
   tipSwipeOk &&
   tipSwipeLayer === 3 &&
   deepSwipeOk &&
   bottomSwipeOk &&
-  bottomSwipeLayer === 15 &&
+  bottomSwipeLayer === 24 &&
   farSwipeBottom &&
   bTipOk &&
   bDeepOk &&
   postBottomTipOk &&
-  bottomNoTips &&
+  bottomCarriesBaseTips &&
   tipButtonsOk2 &&
   bottomButtonsOk;
 
@@ -410,9 +419,13 @@ console.log({
   bottomButtons: bottomButtons.length,
   postBottomTipSwipe,
   postBottomTipOk,
-  bottomNoTips,
+  baseTipCount: baseTipIdx.length,
+  baseTipDriftFromBottom,
+  baseTipsMoved,
+  bottomCarriesBaseTips,
   bottomSelCount: bottomSel.length,
-  bottomHasTip,
+  bottomBaseTipCount,
+  bottomHasOwnTip,
 });
 console.log(pass ? 'PASS' : 'FAIL');
 process.exit(pass ? 0 : 1);

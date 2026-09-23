@@ -28,7 +28,7 @@ export interface FaceTurnMove {
   steps: number;
   /** Pyraminx tip-only turn when true. */
   tip?: boolean;
-  /** Pyraminx bottom / far-cap layer about the tip axis when true. */
+  /** Pyraminx bottom layer (far band + base tips) about the tip axis when true. */
   bottom?: boolean;
 }
 
