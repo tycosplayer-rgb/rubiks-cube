@@ -13,6 +13,12 @@ const IDS = ['U', 'R', 'FR', 'DR', 'D', 'DL', 'L', 'FL', 'BR', 'B', 'BL', 'DB'];
 const INNER_SCALE_N3 = 0.40;
 /** Corner tip depth along each outer edge (fraction of edge length from the vertex). */
 const CORNER_EDGE_T = 0.32;
+/** Even-N star tip radius (fraction from face center toward vertex). */
+const STAR_TIP_SCALE = 0.44;
+/** Even-N star dent radius (fraction from face center toward edge midpoint). */
+const STAR_DENT_SCALE = 0.20;
+/** Even-N split between inner ring band and outer edge band (0=at star, 1=at outer edge). */
+const STAR_BAND_T = 0.48;
 /** Geometry inset for grooves (keep gaps via mesh, not styleScale). */
 const STICKER_SHRINK = 0.992;
 /** Push facelets outward along normals so spinning layers clear the core. */
@@ -42,8 +48,9 @@ interface MegaTile extends PolyTile {
  * Dodecahedron Megaminx, orders 2–7.
  * N=3: classic star-cut (1 center + 5 edges + 5 corners).
  * N=2: Junior-like corners only.
- * N≥4: barycentric sector grid — odd: fixed center pentagon; even: 5 kites at c;
- *       outer has N stickers/side (N−2 mid-edges); face-local rings between.
+ * N≥4 odd: barycentric sector grid with fixed center pentagon + rings.
+ * N≥4 even: star-cut — black five-pointed star void (tips→vertices), colored
+ *       pieces in the bays; outer has N stickers/side (N−2 mid-edges).
  * Face turns 72°; one outer face layer per turn (whole on-face stickers + piece expand).
  */
 export class Megaminx extends PolyPuzzle {
@@ -115,10 +122,13 @@ export class Megaminx extends PolyPuzzle {
       colorCss: CSS[i],
     }));
 
+    // Even orders: near-black core so the star-shaped sticker void reads as a
+    // solid black ★ (tips→vertices). Odd/N=3 keep neutral gray plastic.
+    const coreColor = this.order % 2 === 0 ? 0x0a0a0a : 0x8b929c;
     this.core = new THREE.Mesh(
       new THREE.DodecahedronGeometry(CORE_RADIUS, 0),
       new THREE.MeshStandardMaterial({
-        color: 0x8b929c,
+        color: coreColor,
         roughness: 0.85,
         metalness: 0.0,
         flatShading: true,
@@ -235,24 +245,23 @@ export class Megaminx extends PolyPuzzle {
       return;
     }
 
-    // N ≥ 4: barycentric sector subdivision → real Megaminx pieces.
+    // N ≥ 4: odd = center pentagon grid; even = star-cut (black star void).
     this.buildHigherFace(N, faceId, points, c, raw, vertId, edgeId, addPoly);
   }
 
   /**
    * Higher-order face geometry (N≥4).
    *
-   * Triangular barycentric grid on each of the 5 sectors (m = N−1):
-   *   P[r][k] = ((m−r)·c + (r−k)·Vi + k·Vi₊₁) / m
+   * Odd N: triangular barycentric grid with fixed center pentagon + face-local
+   * rings + outer corners/(N−2) mid-edges (Gigaminx / Teraminx style).
    *
-   * Piece grouping (matches physical Master Kilominx / Gigaminx topology):
-   * - Odd N: fixed center pentagon at r=1
-   * - Even N: 5 face-local kites meeting at c
-   * - Outer corners at dodecahedron vertices (piece shared by 3 faces)
-   * - N−2 mid-edge stickers per side (piece shared by 2 faces), centered on
-   *   barycentric edge points and extending to half-way cuts so each side
-   *   shows exactly N stickers including corners
-   * - Face-local ring stickers between center/kites and the outer band
+   * Even N: explicit star-cut (generalizes N=3 INNER_SCALE / CORNER_EDGE_T):
+   * - Innermost five-pointed star region has NO colored facelets so the
+   *   near-black core shows through as a ★ (tips→vertices), matching the
+   *   SENGSO-style 四阶五魔方 reference.
+   * - 2 face-local ring stickers per edge-bay nestle into the star valleys.
+   * - Outer band: 5 corners + (N−2) mid-edge stickers/side (exactly N along edge).
+   * - Extra intermediate ring bands for N≥6 between star bay and outer band.
    */
   private buildHigherFace(
     N: number,
@@ -264,10 +273,25 @@ export class Megaminx extends PolyPuzzle {
     edgeId: (a: THREE.Vector3, b: THREE.Vector3) => string,
     addPoly: (poly: THREE.Vector3[], pieceId: string, kind: MegaTile['kind']) => void,
   ): void {
-    const m = N - 1;
-    const odd = N % 2 === 1;
+    if (N % 2 === 0) {
+      this.buildEvenStarFace(N, faceId, points, c, raw, vertId, edgeId, addPoly);
+      return;
+    }
+    this.buildOddHigherFace(N, faceId, points, c, raw, vertId, edgeId, addPoly);
+  }
 
-    // Sector grids P[i][r][k]
+  /** Odd N≥5: center pentagon + barycentric rings + outer band. */
+  private buildOddHigherFace(
+    N: number,
+    faceId: string,
+    points: THREE.Vector3[],
+    c: THREE.Vector3,
+    raw: THREE.Vector3[],
+    vertId: Map<THREE.Vector3, number>,
+    edgeId: (a: THREE.Vector3, b: THREE.Vector3) => string,
+    addPoly: (poly: THREE.Vector3[], pieceId: string, kind: MegaTile['kind']) => void,
+  ): void {
+    const m = N - 1;
     const P: THREE.Vector3[][][] = [];
     for (let i = 0; i < 5; i++) {
       const Vi = points[i];
@@ -285,62 +309,162 @@ export class Megaminx extends PolyPuzzle {
       }
     }
 
-    // Inner boundary of the outer corner/edge band (row index).
-    // N=4,5 → 2; N=6 → 4 (room for kite + unsplit + split rings); N=7 → 4.
-    const outerStart = N <= 5 ? 2 : N === 6 ? 4 : Math.min(m - 1, 4);
+    // N=5 → outerStart 2; N=7 → 4
+    const outerStart = N <= 5 ? 2 : Math.min(m - 1, 4);
 
-    // Even-N kite tip row. N=4: kites reach outerStart (no rings). N≥6: stop at 2.
-    const kiteEnd = odd ? 0 : N === 4 ? outerStart : 2;
+    const centerPent = [0, 1, 2, 3, 4].map((i) => P[i][1][0]);
+    addPoly(centerPent, `center:${faceId}`, 'center');
 
-    if (odd) {
-      const centerPent = [0, 1, 2, 3, 4].map((i) => P[i][1][0]);
-      addPoly(centerPent, `center:${faceId}`, 'center');
-    } else {
-      for (let i = 0; i < 5; i++) {
-        const row = P[i][kiteEnd];
-        const mid = row[Math.floor(row.length / 2)];
-        addPoly(
-          [c.clone(), row[0], mid, row[row.length - 1]],
-          `ring:${faceId}:kite:${i}`,
-          'ring',
-        );
-      }
-    }
-
-    // Face-local rings between center/kite tips and outerStart.
-    const ringFrom = odd ? 1 : kiteEnd;
-    for (let r = ringFrom; r < outerStart; r++) {
-      // N=6: first band unsplit (5), later bands split (10) → 5+10 ring stickers.
-      const useSplit = !(N === 6 && r === ringFrom);
+    for (let r = 1; r < outerStart; r++) {
       for (let i = 0; i < 5; i++) {
         const innerL = P[i][r][0];
         const innerR = P[i][r][r];
         const outerL = P[i][r + 1][0];
         const outerR = P[i][r + 1][r + 1];
-        if (useSplit) {
-          const midInner =
-            r >= 1 ? P[i][r][Math.floor(r / 2)] : innerL.clone().lerp(innerR, 0.5);
-          const midOuter = P[i][r + 1][Math.floor((r + 1) / 2)];
+        const midInner =
+          r >= 1 ? P[i][r][Math.floor(r / 2)] : innerL.clone().lerp(innerR, 0.5);
+        const midOuter = P[i][r + 1][Math.floor((r + 1) / 2)];
+        addPoly(
+          [outerL, midOuter, midInner, innerL],
+          `ring:${faceId}:${r}:a:${i}`,
+          'ring',
+        );
+        addPoly(
+          [midOuter, outerR, innerR, midInner],
+          `ring:${faceId}:${r}:b:${i}`,
+          'ring',
+        );
+      }
+    }
+
+    this.addOuterBand(N, points, raw, vertId, edgeId, P, outerStart, addPoly);
+  }
+
+  /**
+   * Even N: star-cut face. Black star void (tips→vertices) + bay rings + outer.
+   * N=4: 5 corners + 10 mid-edges + 10 bay rings = 25 colored stickers/face.
+   * N=6: same star + extra intermediate rings so edge shows 6 stickers.
+   */
+  private buildEvenStarFace(
+    N: number,
+    faceId: string,
+    points: THREE.Vector3[],
+    c: THREE.Vector3,
+    raw: THREE.Vector3[],
+    vertId: Map<THREE.Vector3, number>,
+    edgeId: (a: THREE.Vector3, b: THREE.Vector3) => string,
+    addPoly: (poly: THREE.Vector3[], pieceId: string, kind: MegaTile['kind']) => void,
+  ): void {
+    const tip = points.map((p) => c.clone().lerp(p, STAR_TIP_SCALE));
+    const dent: THREE.Vector3[] = [];
+    for (let i = 0; i < 5; i++) {
+      const mid = points[i].clone().lerp(points[(i + 1) % 5], 0.5);
+      dent.push(c.clone().lerp(mid, STAR_DENT_SCALE));
+    }
+
+    // Star void: no colored facelets inside tip/dent outline — black core shows
+    // through as a five-pointed ★ (tips toward vertices).
+
+    const onEdge = (a: THREE.Vector3, b: THREE.Vector3, t: number) => a.clone().lerp(b, t);
+
+    // Corners: same family as N=3 (inner point = star tip).
+    for (let i = 0; i < 5; i++) {
+      const i0 = (i + 4) % 5;
+      const i1 = (i + 1) % 5;
+      const Vi = points[i];
+      const cutNext = onEdge(Vi, points[i1], 1 / N);
+      const cutPrev = onEdge(Vi, points[i0], 1 / N);
+      addPoly(
+        [Vi, cutNext, tip[i], cutPrev],
+        `corner:${vertId.get(raw[i])}`,
+        'corner',
+      );
+    }
+
+    // Circumferential bands between star and outer edge (excl. the edge band itself).
+    // N=4: 1 bay band. N=6: 2 bands so density grows with order.
+    const ringBands = Math.max(1, N / 2 - 1);
+    const splits: number[] = [];
+    if (N === 4) {
+      splits.push(STAR_BAND_T);
+    } else {
+      for (let b = 1; b <= ringBands; b++) splits.push(b / (ringBands + 1));
+    }
+
+    for (let i = 0; i < 5; i++) {
+      const i1 = (i + 1) % 5;
+      const Vi = points[i];
+      const Vi1 = points[i1];
+      const T0 = tip[i];
+      const T1 = tip[i1];
+      const D = dent[i];
+
+      // Outer-edge cut points at k/N (corners own 0 and N; mid-edges own 1..N-2).
+      const E: THREE.Vector3[] = [];
+      for (let k = 1; k <= N - 1; k++) E.push(onEdge(Vi, Vi1, k / N));
+
+      // Star-boundary polyline for this bay: T0 — D — T1.
+      // Map each outer cut E[k] back to a point on that polyline by normalized t.
+      const onStar = (tEdge: number): THREE.Vector3 => {
+        // tEdge in [1/N, (N-1)/N]; midpoint 0.5 → D, near 1/N → T0, near (N-1)/N → T1
+        if (tEdge <= 0.5) {
+          const u = (tEdge - 1 / N) / (0.5 - 1 / N);
+          return T0.clone().lerp(D, Math.min(1, Math.max(0, u)));
+        }
+        const u = (tEdge - 0.5) / ((N - 1) / N - 0.5);
+        return D.clone().lerp(T1, Math.min(1, Math.max(0, u)));
+      };
+
+      // Build concentric polylines at each split (and at the outer edge).
+      // Level 0 = star, levels 1..ringBands = ring interfaces, level ringBands+1 = edge.
+      const levels: THREE.Vector3[][] = [];
+      const starPts = E.map((_, ki) => onStar((ki + 1) / N));
+      levels.push(starPts);
+      for (const s of splits) {
+        levels.push(E.map((e, ki) => starPts[ki].clone().lerp(e, s)));
+      }
+      levels.push(E);
+
+      // Face-local rings: each band × each mid-edge slot (N-2 slots).
+      for (let b = 0; b < ringBands; b++) {
+        const inner = levels[b];
+        const outer = levels[b + 1];
+        for (let s = 0; s < N - 2; s++) {
           addPoly(
-            [outerL, midOuter, midInner, innerL],
-            `ring:${faceId}:${r}:a:${i}`,
-            'ring',
-          );
-          addPoly(
-            [midOuter, outerR, innerR, midInner],
-            `ring:${faceId}:${r}:b:${i}`,
-            'ring',
-          );
-        } else {
-          addPoly(
-            [outerL, outerR, innerR, innerL],
-            `ring:${faceId}:${r}:u:${i}`,
+            [inner[s], inner[s + 1], outer[s + 1], outer[s]],
+            `ring:${faceId}:b${b}:s${s}:e${i}`,
             'ring',
           );
         }
       }
-    }
 
+      // Mid-edge stickers (outermost band).
+      const innerE = levels[ringBands];
+      const ia = vertId.get(raw[i])!;
+      const ib = vertId.get(raw[i1])!;
+      const eKey = edgeId(raw[i], raw[i1]);
+      for (let s = 0; s < N - 2; s++) {
+        const slot = ia < ib ? s : N - 3 - s;
+        addPoly(
+          [innerE[s], innerE[s + 1], E[s + 1], E[s]],
+          `edge:${eKey}:${slot}`,
+          'edge',
+        );
+      }
+    }
+  }
+
+  /** Shared outer corners + mid-edges for odd higher-order faces. */
+  private addOuterBand(
+    N: number,
+    points: THREE.Vector3[],
+    raw: THREE.Vector3[],
+    vertId: Map<THREE.Vector3, number>,
+    edgeId: (a: THREE.Vector3, b: THREE.Vector3) => string,
+    P: THREE.Vector3[][][],
+    outerStart: number,
+    addPoly: (poly: THREE.Vector3[], pieceId: string, kind: MegaTile['kind']) => void,
+  ): void {
     const sampleChord = (row: THREE.Vector3[], t: number): THREE.Vector3 => {
       const nSeg = row.length - 1;
       if (nSeg <= 0) return row[0].clone();
@@ -348,9 +472,8 @@ export class Megaminx extends PolyPuzzle {
       const j = Math.min(nSeg - 1, Math.floor(f));
       return row[j].clone().lerp(row[j + 1], f - j);
     };
+    const onEdge = (a: THREE.Vector3, b: THREE.Vector3, t: number) => a.clone().lerp(b, t);
 
-    // Outer corners + (N−2) mid-edge stickers per side.
-    // Equal-width cuts at k/N along each outer edge (corner depth ≈ 1/N ≈ N=3 star).
     for (let i = 0; i < 5; i++) {
       const iPrev = (i + 4) % 5;
       const i1 = (i + 1) % 5;
@@ -359,18 +482,12 @@ export class Megaminx extends PolyPuzzle {
       const Vi1 = points[i1];
       const Vprev = points[iPrev];
 
-      const onEdge = (a: THREE.Vector3, b: THREE.Vector3, t: number) => a.clone().lerp(b, t);
-
-      const cutNext = onEdge(Vi, Vi1, 1 / N);
-      const cutPrev = onEdge(Vi, Vprev, 1 / N);
       addPoly(
-        [Vi, cutNext, Hin[0], cutPrev],
+        [Vi, onEdge(Vi, Vi1, 1 / N), Hin[0], onEdge(Vi, Vprev, 1 / N)],
         `corner:${vertId.get(raw[i])}`,
         'corner',
       );
 
-      // Mid-edge slots s = 0..N-3 occupy [(s+1)/N, (s+2)/N] along the edge.
-      // Slot index is canonical along lower→higher vert id so both faces agree.
       const ia = vertId.get(raw[i])!;
       const ib = vertId.get(raw[i1])!;
       const eKey = edgeId(raw[i], raw[i1]);
@@ -580,10 +697,17 @@ export class Megaminx extends PolyPuzzle {
   expectedPerFace(): number {
     const N = this.order;
     if (N === 2) return 5;
-    // 5-fold-symmetric facelet count: 5·⌊N/2⌋·⌈N/2⌉ + (N mod 2)
-    // N=3..7 → 11, 20, 31, 45, 61 (matches Master/Gigaminx/Teraminx topology;
-    // N²+2N−4 agrees through N=5; N=6/7 use the symmetric values 45/61).
-    return 5 * Math.floor(N / 2) * Math.ceil(N / 2) + (N % 2);
+    if (N === 3) return 11;
+    // Even star-cut: no center sticker; 5 corners + 5·(N−2) edges + rings.
+    // N=4: 5+10+10 = 25. N=6: 5+20+40 = 65 (2 bands × 4 slots × 5).
+    if (N % 2 === 0) {
+      const midEdges = 5 * (N - 2);
+      const ringBands = Math.max(1, N / 2 - 1);
+      const rings = ringBands * 5 * (N - 2);
+      return 5 + midEdges + rings;
+    }
+    // Odd: 5·⌊N/2⌋·⌈N/2⌉ + 1 → N=5/7 → 31/61
+    return 5 * Math.floor(N / 2) * Math.ceil(N / 2) + 1;
   }
 
   /** Test helper: counts and C5 closure (no animation). */
@@ -636,14 +760,15 @@ export class Megaminx extends PolyPuzzle {
     } else if (this.order === 2) {
       pieceGraphOk = pieceGraphOk && kinds.corner === 60 && kinds.center === 0 && kinds.edge === 0;
     } else if (this.order === 4) {
-      // 5 kite rings/face, 10 mid-edges/face, 5 corners/face → 20; graph: edge×2, corner×3, ring×1
+      // Star void (no center): 5 corners + 10 edges + 10 bay rings / face → 25
+      // Totals: corner stickers 60, edge 120, ring 120; graph edge×2, corner×3, ring×1
       pieceGraphOk =
         pieceGraphOk &&
         kinds.center === 0 &&
         kinds.corner === 60 &&
         kinds.edge === 120 &&
-        kinds.ring === 60 &&
-        this.expectedPerFace() === 20;
+        kinds.ring === 120 &&
+        this.expectedPerFace() === 25;
     } else if (this.order === 5) {
       pieceGraphOk =
         pieceGraphOk &&
@@ -652,6 +777,15 @@ export class Megaminx extends PolyPuzzle {
         kinds.edge === 180 &&
         kinds.ring === 120 &&
         this.expectedPerFace() === 31;
+    } else if (this.order === 6) {
+      // Star void: 5 corners + 20 edges + 40 rings / face → 65
+      pieceGraphOk =
+        pieceGraphOk &&
+        kinds.center === 0 &&
+        kinds.corner === 60 &&
+        kinds.edge === 240 &&
+        kinds.ring === 480 &&
+        this.expectedPerFace() === 65;
     }
 
     const onFace = this.stickersOnFace(faceId).length;
