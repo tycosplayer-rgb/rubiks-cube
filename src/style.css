@@ -101,6 +101,7 @@ label.ctrl {
   gap: 6px;
   font-size: 0.85rem;
   color: var(--muted);
+  white-space: nowrap;
 }
 
 select,
@@ -115,6 +116,11 @@ select {
   border-radius: 8px;
   padding: 6px 8px;
   font-size: 0.9rem;
+  white-space: nowrap;
+}
+
+#order-ctrl {
+  flex: 0 0 auto;
 }
 
 button {

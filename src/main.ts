@@ -186,15 +186,16 @@ function createPuzzle(type: PuzzleType): Puzzle {
 }
 function rebuildOrderOptions(type: PuzzleType): void {
   const order = orders[type];
+  const aliases: Record<number, string> = { 3: 'Megaminx', 5: 'Gigaminx', 7: 'Teraminx' };
   const opts = [2, 3, 4, 5, 6, 7].map((n) => {
-    let label = type === 'cube' ? `${n}×${n}×${n}` : `${n}阶`;
-    if (type === 'megaminx') {
-      const aka: Record<number, string> = { 3: 'Megaminx', 5: 'Gigaminx', 7: 'Teraminx' };
-      if (aka[n]) label = `${n}阶 (${aka[n]})`;
-    }
+    // Keep the control compact; the well-known Megaminx names live in its tooltip.
+    const label = type === 'cube' ? `${n}×${n}×${n}` : `${n}阶`;
     return `<option value="${n}" ${n === order ? 'selected' : ''}>${label}</option>`;
   });
   orderSel.innerHTML = opts.join('');
+  const alias = type === 'megaminx' ? aliases[order] : undefined;
+  orderSel.title = alias ? `${order}阶（${alias}）` : `${order}阶`;
+  orderSel.setAttribute('aria-label', alias ? `阶数：${order}阶（${alias}）` : `阶数：${order}阶`);
 }
 let puzzle: Puzzle = createPuzzle(currentType);
 puzzle.setCastShadows(useShadows);
