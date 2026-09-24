@@ -1,5 +1,5 @@
 /**
- * Headless Megaminx parallel-lattice / layer checks (no WebGL).
+ * Headless Megaminx parallel-lattice / layer checks (N≥4 lattice + N=5 Gigaminx; no WebGL).
  * Run: npm run verify:megaminx
  */
 import { Megaminx } from '../src/cube/Megaminx.ts';
@@ -562,8 +562,8 @@ function smokeMegaOrder(N) {
 }
 
 
-// --- Even-N parallel lattice: N stickers/edge, filled center, no star void ---
-function assertEvenParallelCuts(N) {
+// --- Parallel lattice (N≥4): N stickers/edge, filled center, no star void ---
+function assertParallelCuts(N) {
   const q = new Megaminx(N, 'sticker');
   q.group.updateMatrixWorld(true);
   const expected = q.expectedPerFace();
@@ -696,8 +696,10 @@ function assertEvenParallelCuts(N) {
   console.log('parallelCut', N, { facesOk, expected, ok });
   return ok;
 }
-const parallelCut4 = assertEvenParallelCuts(4);
-const parallelCut6 = assertEvenParallelCuts(6);
+const parallelCut4 = assertParallelCuts(4);
+const parallelCut5 = assertParallelCuts(5);
+const parallelCut6 = assertParallelCuts(6);
+const parallelCut7 = assertParallelCuts(7);
 
 // --- Multi-slice depth bands (N≥4): equal-width parallel slabs, closed orbits ---
 const FACE_LAYER_THRESH = 2.17;
@@ -833,7 +835,7 @@ function assertMultiDepth(N) {
     }
     // N=4 Master Kilominx: outer = full face (31 pieces → 51 tiles with wing stickers);
     // inner = non-empty belt, no U-face stickers in selection.
-    if (N === 4) {
+    if (N === 4 || N === 5) {
       if (vv.bandCounts[0] < expected) {
         console.error('multiDepth', N, 'outer too small', vv.bandCounts[0], expected);
         return false;
@@ -852,6 +854,16 @@ function assertMultiDepth(N) {
         console.error('multiDepth', N, 'inner moves U-face stickers', onU);
         return false;
       }
+      // Gigaminx/Master: after one 2U, every U-face sticker piece id unchanged
+      q.reset();
+      const beforeIds = q.stickersOnFace('U').map((t) => t.pieceId).sort().join(',');
+      apply('U', 1, 1);
+      const afterIds = q.stickersOnFace('U').map((t) => t.pieceId).sort().join(',');
+      if (beforeIds !== afterIds) {
+        console.error('multiDepth', N, '2U moved outer U-face piece set');
+        return false;
+      }
+      q.reset();
     }
   }
   console.log('multiDepth', N, {
@@ -904,7 +916,9 @@ const pass =
   smokeMega6 &&
   smokeMega7 &&
   parallelCut4 &&
+  parallelCut5 &&
   parallelCut6 &&
+  parallelCut7 &&
   multiDepth4 &&
   multiDepth5 &&
   multiDepth6;
@@ -925,7 +939,9 @@ console.log({
   staleTrapOk,
   dragScoringOk,
   parallelCut4,
+  parallelCut5,
   parallelCut6,
+  parallelCut7,
   multiDepth4,
   multiDepth5,
   multiDepth6,
