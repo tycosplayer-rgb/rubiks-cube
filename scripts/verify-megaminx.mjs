@@ -676,7 +676,7 @@ function assertEvenStarOrientation(N) {
       }
     }
 
-    // Also: tip radius must exceed corner-notch (dent) radius.
+    // Dent radius (内角) must sit well inside tip radius (外角) — sharper ★.
     const dentR = Math.max(
       ...corners.map((t) => {
         const attr = t.mesh.geometry.getAttribute('position');
@@ -689,8 +689,14 @@ function assertEvenStarOrientation(N) {
       }),
     );
     const tipR = Math.min(...tips.map((t) => t.r));
-    if (!(tipR > dentR * 1.2)) {
-      console.error('starOrient', N, face.id, { tipR, dentR, note: 'tips farther out than dents' });
+    // tip≈apothem≈0.809 R_v; dent≈STAR_DENT_SCALE·R_v (~0.20) → ratio ≳ 3.
+    if (!(dentR < tipR) || !(tipR > dentR * 2.0)) {
+      console.error('starOrient', N, face.id, {
+        tipR: +tipR.toFixed(4),
+        dentR: +dentR.toFixed(4),
+        ratio: +(tipR / dentR).toFixed(3),
+        note: 'dent radius must be < tip radius (sharper ★; 内角往中心缩)',
+      });
       return false;
     }
     facesOk++;

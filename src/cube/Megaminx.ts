@@ -15,8 +15,9 @@ const INNER_SCALE_N3 = 0.40;
 const CORNER_EDGE_T = 0.32;
 /** Even-N star tip: 1 = meet outer edge at midpoint (挨到棱). Shrink leaves a thin groove. */
 const STAR_TIP_SCALE = 1;
-/** Even-N star dent radius (fraction from face center toward vertex); ~0.38·apothem/R_v. */
-const STAR_DENT_SCALE = 0.30;
+/** Even-N star dent radius (fraction from face center toward vertex).
+ *  Smaller → sharper ★ points (内角往中心缩). Classic pentagram ≈0.30; pointed ★ ≈0.20. */
+const STAR_DENT_SCALE = 0.20;
 /** Even-N split between inner ring band and outer edge band (0=at star, 1=at outer edge). */
 const STAR_BAND_T = 0.55;
 /** Geometry inset for grooves (keep gaps via mesh, not styleScale). */
