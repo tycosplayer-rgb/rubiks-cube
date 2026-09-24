@@ -13,12 +13,12 @@ const IDS = ['U', 'R', 'FR', 'DR', 'D', 'DL', 'L', 'FL', 'BR', 'B', 'BL', 'DB'];
 const INNER_SCALE_N3 = 0.40;
 /** Corner tip depth along each outer edge (fraction of edge length from the vertex). */
 const CORNER_EDGE_T = 0.32;
-/** Even-N star tip radius (fraction from face center toward edge midpoint). */
-const STAR_TIP_SCALE = 0.44;
-/** Even-N star dent radius (fraction from face center toward vertex). */
-const STAR_DENT_SCALE = 0.20;
+/** Even-N star tip: 1 = meet outer edge at midpoint (挨到棱). Shrink leaves a thin groove. */
+const STAR_TIP_SCALE = 1;
+/** Even-N star dent radius (fraction from face center toward vertex); ~0.38·apothem/R_v. */
+const STAR_DENT_SCALE = 0.30;
 /** Even-N split between inner ring band and outer edge band (0=at star, 1=at outer edge). */
-const STAR_BAND_T = 0.48;
+const STAR_BAND_T = 0.55;
 /** Geometry inset for grooves (keep gaps via mesh, not styleScale). */
 const STICKER_SHRINK = 0.992;
 /** Push facelets outward along normals so spinning layers clear the core. */
@@ -29,9 +29,9 @@ const CORE_RADIUS = 2.32;
 const VERT_EPS = 1e-4;
 /**
  * Stickers currently on a face project ~2.21 onto the face axis; adjacent-face
- * stickers sit lower (≤~2.06 even at N=6). Threshold midway selects on-face only.
+ * stickers sit lower (≤~2.13 even at N=6 with tips on edges). Midway ~2.17.
  */
-const FACE_LAYER_THRESH = 2.12;
+const FACE_LAYER_THRESH = 2.17;
 
 interface FoundFace {
   normal: THREE.Vector3;
@@ -357,11 +357,12 @@ export class Megaminx extends PolyPuzzle {
   ): void {
     // Classic orientation: tips toward edge midpoints M[i]=lerp(V[i],V[i+1],0.5);
     // dents toward vertices (corners sit in the notches between star points).
-    // Equivalent to a π/5 (36°) offset relative to vertex-aimed rays.
+    // Tips extend to the outer pentagon edge (STAR_TIP_SCALE=1 → 挨到棱).
     const dent = points.map((p) => c.clone().lerp(p, STAR_DENT_SCALE));
     const tip: THREE.Vector3[] = [];
     for (let i = 0; i < 5; i++) {
       const mid = points[i].clone().lerp(points[(i + 1) % 5], 0.5);
+      // Scale along center→mid so tip meets (or nearly meets) the outer edge.
       tip.push(c.clone().lerp(mid, STAR_TIP_SCALE));
     }
 
@@ -394,16 +395,35 @@ export class Megaminx extends PolyPuzzle {
       for (let b = 1; b <= ringBands; b++) splits.push(b / (ringBands + 1));
     }
 
+    // Drop consecutive duplicate verts so tip-on-edge columns become triangles
+    // instead of zero-area quads (STAR_TIP_SCALE=1 → tip coincides with edge mid).
+    const addClean = (pts: THREE.Vector3[], pieceId: string, kind: MegaTile['kind']) => {
+      const clean: THREE.Vector3[] = [];
+      for (const p of pts) {
+        if (!clean.length || clean[clean.length - 1].distanceToSquared(p) > 1e-16) {
+          clean.push(p);
+        }
+      }
+      if (
+        clean.length >= 2 &&
+        clean[0].distanceToSquared(clean[clean.length - 1]) < 1e-16
+      ) {
+        clean.pop();
+      }
+      if (clean.length >= 3) addPoly(clean, pieceId, kind);
+    };
+
     for (let i = 0; i < 5; i++) {
       const i1 = (i + 1) % 5;
       const Vi = points[i];
       const Vi1 = points[i1];
-      // Bay star boundary: dent@Vi — tip@edgeMid — dent@Vi1 (tip points into edge).
+      // Bay star boundary: dent@Vi — tip@edgeMid — dent@Vi1 (tip meets outer edge).
       const L = dent[i];
       const T = tip[i];
       const R = dent[i1];
 
       // Outer-edge cut points at k/N (corners own 0 and N; mid-edges own 1..N-2).
+      // For even N, E[N/2 - 1] is the edge midpoint (same ray as tip).
       const E: THREE.Vector3[] = [];
       for (let k = 1; k <= N - 1; k++) E.push(onEdge(Vi, Vi1, k / N));
 
@@ -421,6 +441,7 @@ export class Megaminx extends PolyPuzzle {
 
       // Build concentric polylines at each split (and at the outer edge).
       // Level 0 = star, levels 1..ringBands = ring interfaces, level ringBands+1 = edge.
+      // At the tip column, starPts coincides with E when STAR_TIP_SCALE=1 → triangles.
       const levels: THREE.Vector3[][] = [];
       const starPts = E.map((_, ki) => onStar((ki + 1) / N));
       levels.push(starPts);
@@ -434,7 +455,7 @@ export class Megaminx extends PolyPuzzle {
         const inner = levels[b];
         const outer = levels[b + 1];
         for (let s = 0; s < N - 2; s++) {
-          addPoly(
+          addClean(
             [inner[s], inner[s + 1], outer[s + 1], outer[s]],
             `ring:${faceId}:b${b}:s${s}:e${i}`,
             'ring',
@@ -442,14 +463,14 @@ export class Megaminx extends PolyPuzzle {
         }
       }
 
-      // Mid-edge stickers (outermost band).
+      // Mid-edge stickers (outermost band) — still exactly N−2 per side (N along edge).
       const innerE = levels[ringBands];
       const ia = vertId.get(raw[i])!;
       const ib = vertId.get(raw[i1])!;
       const eKey = edgeId(raw[i], raw[i1]);
       for (let s = 0; s < N - 2; s++) {
         const slot = ia < ib ? s : N - 3 - s;
-        addPoly(
+        addClean(
           [innerE[s], innerE[s + 1], E[s + 1], E[s]],
           `edge:${eKey}:${slot}`,
           'edge',

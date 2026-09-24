@@ -252,7 +252,7 @@ function layerFacesForPiece(pieceId) {
   const faces = [];
   for (const f of m['faces']) {
     const tiles = m['megaTiles'].filter((t) => t.pieceId === pieceId);
-    if (tiles.some((t) => m['tileWorldCenter'](t).dot(f.axis) > 2.12)) faces.push(f.id);
+    if (tiles.some((t) => m['tileWorldCenter'](t).dot(f.axis) > 2.17)) faces.push(f.id);
   }
   return faces;
 }
@@ -521,13 +521,12 @@ function smokeMegaOrder(N) {
   return ok;
 }
 
-// --- Even-N star orientation: tips → edge midpoints (not vertices) ---
-// Each ring sticker's two innermost verts lie on the star boundary. Among those,
-// the farthest-from-center verts are the tips — they must align with edge mids.
+// --- Even-N star: tips → edge midpoints AND tips reach outer edges (挨到棱) ---
 function assertEvenStarOrientation(N) {
   const q = new Megaminx(N, 'sticker');
   q.group.updateMatrixWorld(true);
   let facesOk = 0;
+  const v = new THREE.Vector3();
   for (const face of q['faces']) {
     const axis = face.axis.clone().normalize();
     const onFace = q.stickersOnFace(face.id);
@@ -542,7 +541,11 @@ function assertEvenStarOrientation(N) {
     const angOf = (p) => {
       const radial = p.clone().sub(faceC);
       radial.addScaledVector(axis, -radial.dot(axis));
-      return { r: radial.length(), ang: Math.atan2(radial.dot(yAxis), radial.dot(xAxis)) };
+      return {
+        r: radial.length(),
+        ang: Math.atan2(radial.dot(yAxis), radial.dot(xAxis)),
+        p: p.clone(),
+      };
     };
     const angDist = (a, b) => {
       let d = Math.abs(a - b) % (Math.PI * 2);
@@ -552,6 +555,7 @@ function assertEvenStarOrientation(N) {
 
     const corners = onFace.filter((t) => t.kind === 'corner');
     const rings = onFace.filter((t) => t.kind === 'ring');
+    const edges = onFace.filter((t) => t.kind === 'edge');
     if (corners.length !== 5 || rings.length < 5) {
       console.error('starOrient', N, face.id, 'bad counts', {
         corners: corners.length,
@@ -560,9 +564,24 @@ function assertEvenStarOrientation(N) {
       return false;
     }
 
-    const vertexAngs = corners
-      .map((t) => angOf(q['tileWorldCenter'](t)).ang)
-      .sort((a, b) => a - b);
+    // Outer pentagon vertices = farthest vert of each corner sticker.
+    const outerVerts = [];
+    for (const t of corners) {
+      const attr = t.mesh.geometry.getAttribute('position');
+      let best = null;
+      let bestR = -1;
+      for (let i = 0; i < attr.count; i++) {
+        v.fromBufferAttribute(attr, i).applyMatrix4(t.mesh.matrixWorld);
+        const a = angOf(v);
+        if (a.r > bestR) {
+          bestR = a.r;
+          best = a;
+        }
+      }
+      outerVerts.push(best);
+    }
+    outerVerts.sort((a, b) => a.ang - b.ang);
+    const vertexAngs = outerVerts.map((o) => o.ang);
     const midAngs = vertexAngs.map((a, i) => {
       let b = vertexAngs[(i + 1) % 5];
       if (b < a) b += Math.PI * 2;
@@ -571,31 +590,39 @@ function assertEvenStarOrientation(N) {
       if (m <= -Math.PI) m += Math.PI * 2;
       return m;
     });
+    const edgeMids = outerVerts.map((a, i) => {
+      const b = outerVerts[(i + 1) % 5];
+      return a.p.clone().lerp(b.p, 0.5);
+    });
 
-    // Star-boundary samples = 2 innermost verts of every ring sticker.
-    const starBound = [];
-    const v = new THREE.Vector3();
-    for (const t of rings) {
+    // Tips = sticker verts closest to each outer-edge midpoint (ring+edge).
+    // When STAR_TIP_SCALE=1, tips lie on the edge; max-r would wrongly pick
+    // near-vertex edge samples (larger radius than the apothem).
+    const allSamples = [];
+    for (const t of [...rings, ...edges]) {
       const attr = t.mesh.geometry.getAttribute('position');
-      const tv = [];
       for (let i = 0; i < attr.count; i++) {
         v.fromBufferAttribute(attr, i).applyMatrix4(t.mesh.matrixWorld);
-        tv.push(angOf(v));
+        allSamples.push(angOf(v));
       }
-      tv.sort((a, b) => a.r - b.r);
-      starBound.push(tv[0], tv[1]);
     }
-    // Tips = farthest star-boundary samples, clustered by angle (5 expected).
-    starBound.sort((a, b) => b.r - a.r);
     const tips = [];
-    for (const s of starBound) {
-      if (tips.some((t) => angDist(t.ang, s.ang) < 0.35)) continue;
-      tips.push(s);
-      if (tips.length >= 5) break;
-    }
-    if (tips.length < 5) {
-      console.error('starOrient', N, face.id, 'fewer than 5 tips', tips.length);
-      return false;
+    for (let ei = 0; ei < 5; ei++) {
+      const mid = edgeMids[ei];
+      let best = null;
+      let bestD = Infinity;
+      for (const s of allSamples) {
+        const d = s.p.distanceTo(mid);
+        if (d < bestD) {
+          bestD = d;
+          best = s;
+        }
+      }
+      if (!best) {
+        console.error('starOrient', N, face.id, 'no tip near mid', ei);
+        return false;
+      }
+      tips.push(best);
     }
 
     let alignMid = 0;
@@ -613,6 +640,40 @@ function assertEvenStarOrientation(N) {
         note: 'star tips must aim at edge midpoints',
       });
       return false;
+    }
+
+    // Tip reach (挨到棱): each tip near the corresponding outer edge segment.
+    // Tolerance allows STICKER_SHRINK inset (~0.01–0.05 of face size).
+    const TIP_EDGE_TOL = 0.08;
+    for (let i = 0; i < 5; i++) {
+      const tip = tips[i];
+      // Match tip to nearest edge by angle
+      let bestEdge = 0;
+      let bestD = Infinity;
+      for (let e = 0; e < 5; e++) {
+        const d = angDist(tip.ang, midAngs[e]);
+        if (d < bestD) {
+          bestD = d;
+          bestEdge = e;
+        }
+      }
+      const a = outerVerts[bestEdge].p;
+      const b = outerVerts[(bestEdge + 1) % 5].p;
+      const ab = b.clone().sub(a);
+      const ap = tip.p.clone().sub(a);
+      const u = Math.max(0, Math.min(1, ap.dot(ab) / ab.lengthSq()));
+      const proj = a.clone().addScaledVector(ab, u);
+      const dist = tip.p.distanceTo(proj);
+      if (dist > TIP_EDGE_TOL) {
+        console.error('starOrient', N, face.id, {
+          tipEdgeDist: +dist.toFixed(4),
+          tipR: +tip.r.toFixed(4),
+          midR: +angOf(edgeMids[bestEdge]).r.toFixed(4),
+          tol: TIP_EDGE_TOL,
+          note: 'star tips must reach outer edges (挨到棱)',
+        });
+        return false;
+      }
     }
 
     // Also: tip radius must exceed corner-notch (dent) radius.
