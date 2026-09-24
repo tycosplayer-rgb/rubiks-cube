@@ -1,5 +1,5 @@
 /**
- * Headless Megaminx checks (N≥4 parallel lattice; N=4 black ★ overlay; no WebGL).
+ * Headless Megaminx checks (N≥4 parallel lattice; N=4 ★ void / no center; no WebGL).
  * Run: npm run verify:megaminx
  */
 import { Megaminx } from '../src/cube/Megaminx.ts';
@@ -562,7 +562,7 @@ function smokeMegaOrder(N) {
 }
 
 
-// --- Parallel lattice (N≥5): N stickers/edge, filled center, no star void ---
+// --- Parallel lattice (N≥4): N stickers/edge; N=4 ★ void (no center); N≥5 filled center ---
 function assertParallelCuts(N) {
   const q = new Megaminx(N, 'sticker');
   q.group.updateMatrixWorld(true);
@@ -581,12 +581,13 @@ function assertParallelCuts(N) {
     const corners = onFace.filter((t) => t.kind === 'corner');
     const edges = onFace.filter((t) => t.kind === 'edge');
     const rings = onFace.filter((t) => t.kind === 'ring');
-    if (centers.length !== 1 || corners.length !== 5 || edges.length !== N - 2) {
-      // edges.length is mid-edges per face = 5*(N-2)
-      // fix check below
-    }
-    if (centers.length !== 1) {
-      console.error('parallelCut', N, face.id, 'need 1 center', { centers: centers.length });
+    // N=4: ★ void → no center sticker. N≥5: filled center.
+    const expectCenters = N === 4 ? 0 : 1;
+    if (centers.length !== expectCenters) {
+      console.error('parallelCut', N, face.id, 'bad center count', {
+        centers: centers.length,
+        expect: expectCenters,
+      });
       return false;
     }
     if (corners.length !== 5) {
@@ -681,14 +682,31 @@ function assertParallelCuts(N) {
       }
     }
 
-    // Center sticker should sit near face center (not a star void).
-    const cenTile = centers[0];
-    const cenPos = q['tileWorldCenter'](cenTile);
-    const radial = cenPos.clone().sub(faceC);
-    radial.addScaledVector(axis, -radial.dot(axis));
-    if (radial.length() > 0.35) {
-      console.error('parallelCut', N, face.id, 'center too far from face center', radial.length());
-      return false;
+    if (N === 4) {
+      // ★ void: no sticker near face center; no overlay mesh.
+      if (q.debugStarOverlays().length !== 0) {
+        console.error('parallelCut', N, face.id, 'unexpected ★ overlay mesh');
+        return false;
+      }
+      for (const t of onFace) {
+        const pos = q['tileWorldCenter'](t);
+        const radial = pos.clone().sub(faceC);
+        radial.addScaledVector(axis, -radial.dot(axis));
+        if (radial.length() < 0.25) {
+          console.error('parallelCut', N, face.id, 'sticker in ★ void core', t.kind, radial.length());
+          return false;
+        }
+      }
+    } else {
+      // Center sticker should sit near face center (filled, not a star void).
+      const cenTile = centers[0];
+      const cenPos = q['tileWorldCenter'](cenTile);
+      const radial = cenPos.clone().sub(faceC);
+      radial.addScaledVector(axis, -radial.dot(axis));
+      if (radial.length() > 0.35) {
+        console.error('parallelCut', N, face.id, 'center too far from face center', radial.length());
+        return false;
+      }
     }
     facesOk++;
   }
@@ -696,14 +714,19 @@ function assertParallelCuts(N) {
   console.log('parallelCut', N, { facesOk, expected, ok });
   return ok;
 }
-// --- N=4 black ★ overlay: tips → edge midpoints AND tips reach outer edges (挨到棱)
-// Lattice sticker positions are checked separately by parallelCut(4).
+// --- N=4 ★ void: tips → edge midpoints AND tips reach outer edges (挨到棱);
+// no overlay mesh; no center sticker. Lattice outer cuts checked by parallelCut(4).
 function assertEvenStarOrientation(N) {
   const q = new Megaminx(N, 'sticker');
   q.group.updateMatrixWorld(true);
   const overlays = q.debugStarOverlays();
-  if (overlays.length !== 12) {
-    console.error('starOrient', N, 'overlay count', overlays.length, 'expected 12');
+  if (overlays.length !== 0) {
+    console.error('starOrient', N, 'overlay count', overlays.length, 'expected 0 (★ is a void)');
+    return false;
+  }
+  const voids = q.debugStarVoids();
+  if (voids.length !== 12) {
+    console.error('starOrient', N, 'void count', voids.length, 'expected 12');
     return false;
   }
   let facesOk = 0;
@@ -711,6 +734,15 @@ function assertEvenStarOrientation(N) {
   for (const face of q['faces']) {
     const axis = face.axis.clone().normalize();
     const onFace = q.stickersOnFace(face.id);
+    const centers = onFace.filter((t) => t.kind === 'center');
+    if (centers.length !== 0) {
+      console.error('starOrient', N, face.id, 'N=4 must have no center sticker', centers.length);
+      return false;
+    }
+    if (onFace.length !== q.expectedPerFace()) {
+      console.error('starOrient', N, face.id, 'perFace', onFace.length, 'expected', q.expectedPerFace());
+      return false;
+    }
     const faceC = new THREE.Vector3();
     for (const t of onFace) faceC.add(q['tileWorldCenter'](t));
     faceC.multiplyScalar(1 / onFace.length);
@@ -734,7 +766,7 @@ function assertEvenStarOrientation(N) {
       return d;
     };
 
-    // Outer pentagon from corner stickers (lattice — unchanged by ★ overlay).
+    // Outer pentagon from corner stickers (lattice — unchanged by ★ void).
     const corners = onFace.filter((t) => t.kind === 'corner');
     if (corners.length !== 5) {
       console.error('starOrient', N, face.id, 'need 5 corners', corners.length);
@@ -770,57 +802,25 @@ function assertEvenStarOrientation(N) {
       return a.p.clone().lerp(b.p, 0.5);
     });
 
-    // Prefer overlay tagged for this face; fallback: closest to face center.
-    let overlay = overlays.find((m) => m.userData.faceId === face.id);
-    if (!overlay) {
-      let bestD = Infinity;
-      for (const m of overlays) {
-        const c = new THREE.Vector3();
-        m.getWorldPosition(c);
-        const d = c.distanceTo(faceC);
-        if (d < bestD) {
-          bestD = d;
-          overlay = m;
-        }
-      }
-    }
-    if (!overlay) {
-      console.error('starOrient', N, face.id, 'no overlay mesh');
+    const star = voids.find((s) => s.faceId === face.id);
+    if (!star || !star.tips || star.tips.length !== 5 || !star.dents || star.dents.length !== 5) {
+      console.error('starOrient', N, face.id, 'missing tip/dent void data');
       return false;
     }
+    const tips = star.tips.map((arr) => angOf(new THREE.Vector3().fromArray(arr)));
+    const dentSamples = star.dents.map((arr) => angOf(new THREE.Vector3().fromArray(arr)));
 
-    // Tips / dents from userData (build-time positions) transformed to world.
-    overlay.updateMatrixWorld(true);
-    const tipArrs = overlay.userData.starTips;
-    const dentArrs = overlay.userData.starDents;
-    if (!tipArrs || tipArrs.length !== 5 || !dentArrs || dentArrs.length !== 5) {
-      console.error('starOrient', N, face.id, 'missing tip/dent userData');
-      return false;
-    }
-    const tips = tipArrs.map((arr) => {
-      const p = new THREE.Vector3().fromArray(arr).applyMatrix4(overlay.matrixWorld);
-      // userData tips are pre-lift local; mesh already includes lift in geometry.
-      // starTips stored before lift — apply mesh matrix (identity at build) → world.
-      return angOf(p);
-    });
-    // Rebuild tips from geometry verts farthest from face center among overlay verts
-    // that align with edge midpoints (more robust if matrix changes).
+    // Match each tip to nearest edge midpoint (by distance).
     const geoTips = [];
-    const attr = overlay.geometry.getAttribute('position');
-    const samples = [];
-    for (let i = 0; i < attr.count; i++) {
-      v.fromBufferAttribute(attr, i).applyMatrix4(overlay.matrixWorld);
-      samples.push(angOf(v));
-    }
     for (let ei = 0; ei < 5; ei++) {
       const mid = edgeMids[ei];
       let best = null;
       let bestD = Infinity;
-      for (const s of samples) {
-        const d = s.p.distanceTo(mid);
+      for (const t of tips) {
+        const d = t.p.distanceTo(mid);
         if (d < bestD) {
           bestD = d;
-          best = s;
+          best = t;
         }
       }
       if (!best) {
@@ -875,10 +875,6 @@ function assertEvenStarOrientation(N) {
       }
     }
 
-    // Dent radius from userData dents (toward vertices); tipR from geo tips.
-    const dentSamples = dentArrs.map((arr) =>
-      angOf(new THREE.Vector3().fromArray(arr).applyMatrix4(overlay.matrixWorld)),
-    );
     const dentR = Math.max(...dentSamples.map((d) => d.r));
     const tipR = Math.min(...geoTips.map((t) => t.r));
     if (!(dentR < tipR) || !(tipR > dentR * 2.0)) {
@@ -893,7 +889,13 @@ function assertEvenStarOrientation(N) {
     facesOk++;
   }
   const ok = facesOk === 12;
-  console.log('starOrient', N, { facesOk, ok, overlays: overlays.length, expected: q.expectedPerFace() });
+  console.log('starOrient', N, {
+    facesOk,
+    ok,
+    overlays: overlays.length,
+    voids: voids.length,
+    expected: q.expectedPerFace(),
+  });
   return ok;
 }
 
