@@ -1,6 +1,6 @@
 import * as THREE from 'three';
 import { PolyPuzzle, type PolyFace, type PolyTile } from './PolyPuzzle';
-import type { AnyMove, FaceTurnMove, VisualStyle } from './puzzle';
+import type { AnyMove, FaceButton, FaceTurnMove, VisualStyle } from './puzzle';
 
 const COLORS = [
   0xf5f5f5, 0xc41e3a, 0x1646c4, 0xffd500, 0x7b2cbf, 0x009e60,
@@ -46,13 +46,22 @@ interface MegaTile extends PolyTile {
  * N≥4 odd: barycentric sector grid with fixed center pentagon + rings.
  * N≥4 even: parallel-to-edge lattice cuts (N stickers/edge; filled center; no star void).
  *
- * Face turns 72°; one outer face layer per turn (whole on-face stickers + piece expand).
+ * Face turns 72°. Turnable layers per face axis: L = ⌊N/2⌋ (depth 0 = outer face;
+ * depth 1..L-1 = successive inner bands by axis projection). N=2/3 → outer only.
  */
 export class Megaminx extends PolyPuzzle {
   readonly puzzleType = 'megaminx' as const;
   private readonly order: number;
   private readonly megaTiles: MegaTile[] = [];
   private readonly scratch = new THREE.Vector3();
+  /**
+   * Cuts between depth bands along a face axis (solved-state, high→low).
+   * Length = L = ⌊N/2⌋:
+   *   depth 0: d > thresh[0]  (thresh[0] = FACE_LAYER_THRESH)
+   *   depth k: thresh[k] < d ≤ thresh[k-1]
+   * Deepest band lower-bounded by thresh[L-1] (~0 / equator).
+   */
+  private depthThresh: number[] = [FACE_LAYER_THRESH];
 
   constructor(orderOrStyle: number | VisualStyle = 3, style: VisualStyle = 'sticker') {
     const order = typeof orderOrStyle === 'number' ? orderOrStyle : 3;
@@ -61,10 +70,204 @@ export class Megaminx extends PolyPuzzle {
     this.order = THREE.MathUtils.clamp(Math.round(order), 2, 7);
     this.build();
     this.finishBuild();
+    this.computeDepthThresholds();
   }
 
   getOrder(): number {
     return this.order;
+  }
+
+  /** Turnable layers per face axis: ⌊N/2⌋. */
+  layerCount(): number {
+    return Math.max(1, Math.floor(this.order / 2));
+  }
+
+  /** Resolve move.depth → 0..L-1 (default outer). */
+  private resolveDepth(move: FaceTurnMove): number {
+    const L = this.layerCount();
+    if (move.depth === undefined) return 0;
+    return THREE.MathUtils.clamp(Math.round(move.depth), 0, L - 1);
+  }
+
+  /**
+   * Band membership from axis projection (piece maxProj or sticker/hit proj).
+   * Returns -1 when below the deepest turnable band (opposite hemisphere).
+   */
+  private depthOfProjection(d: number): number {
+    const t = this.depthThresh;
+    const L = this.layerCount();
+    if (!t.length) return d > FACE_LAYER_THRESH ? 0 : -1;
+    if (d > t[0]) return 0;
+    for (let k = 1; k < L; k++) {
+      if (d > t[k]) return k;
+    }
+    return -1;
+  }
+
+  /** Max sticker projection of a piece onto an axis. */
+  private pieceMaxProjOnAxis(pieceId: string, axis: THREE.Vector3): number {
+    let maxP = -Infinity;
+    for (const t of this.megaTiles) {
+      if (t.pieceId !== pieceId) continue;
+      maxP = Math.max(maxP, this.tileWorldCenter(t, this.scratch).dot(axis));
+    }
+    return maxP;
+  }
+
+  /**
+   * Build depthThresh from solved-state piece orbits about faces[0].axis.
+   * Depth 0 cut stays FACE_LAYER_THRESH. Inner bands are unions of complete
+   * 72° orbits of non-center pieces fully in the upper hemisphere (so a slice
+   * never straddles the equator or moves another face's center).
+   */
+  private computeDepthThresholds(): void {
+    const L = this.layerCount();
+    if (L <= 1) {
+      this.depthThresh = [FACE_LAYER_THRESH];
+      return;
+    }
+    this.group.updateMatrixWorld(true);
+    const axis = this.faces[0].axis;
+    const q = new THREE.Quaternion().setFromAxisAngle(axis, (Math.PI * 2) / 5);
+
+    type PieceInfo = {
+      id: string;
+      cen: THREE.Vector3;
+      maxProj: number;
+      kind: MegaTile['kind'];
+    };
+    const byId = new Map<string, PieceInfo>();
+    for (const t of this.megaTiles) {
+      const c = this.tileWorldCenter(t, this.scratch).clone();
+      const cur = byId.get(t.pieceId);
+      if (!cur) {
+        byId.set(t.pieceId, {
+          id: t.pieceId,
+          cen: c.clone(),
+          maxProj: c.dot(axis),
+          kind: t.kind,
+        });
+      } else {
+        cur.cen.add(c);
+        cur.maxProj = Math.max(cur.maxProj, c.dot(axis));
+      }
+    }
+    // Finalize centroids (edge=2 stickers, corner=3, ring/center=1).
+    const stickerCount = new Map<string, number>();
+    for (const t of this.megaTiles) {
+      stickerCount.set(t.pieceId, (stickerCount.get(t.pieceId) ?? 0) + 1);
+    }
+    for (const p of byId.values()) {
+      p.cen.multiplyScalar(1 / (stickerCount.get(p.id) ?? 1));
+    }
+    const list = [...byId.values()];
+
+    // Group into 72° orbits.
+    const TOL = 0.15;
+    const used = new Set<string>();
+    type Orbit = { members: PieceInfo[]; meanMax: number; minMax: number; maxMax: number };
+    const orbits: Orbit[] = [];
+    for (const p of list) {
+      if (used.has(p.id)) continue;
+      const members: PieceInfo[] = [p];
+      used.add(p.id);
+      let cur = p.cen.clone();
+      for (let step = 0; step < 4; step++) {
+        cur.applyQuaternion(q);
+        let best: PieceInfo | null = null;
+        let bestD = TOL;
+        for (const o of list) {
+          if (used.has(o.id)) continue;
+          const d = o.cen.distanceTo(cur);
+          if (d < bestD) {
+            bestD = d;
+            best = o;
+          }
+        }
+        if (!best) break;
+        members.push(best);
+        used.add(best.id);
+        cur = best.cen.clone();
+      }
+      const maxes = members.map((m) => m.maxProj);
+      orbits.push({
+        members,
+        meanMax: maxes.reduce((s, x) => s + x, 0) / maxes.length,
+        minMax: Math.min(...maxes),
+        maxMax: Math.max(...maxes),
+      });
+    }
+
+    // Inner candidates: non-center orbits fully above a small equator margin
+    // and at or below the outer-face cut.
+    const EQUATOR = 0.08;
+    const rest = orbits
+      .filter(
+        (o) =>
+          o.members.every((m) => m.kind !== 'center') &&
+          o.minMax > EQUATOR &&
+          o.maxMax <= FACE_LAYER_THRESH + 1e-6,
+      )
+      .sort((a, b) => b.meanMax - a.meanMax);
+
+    if (!rest.length) {
+      const thresh: number[] = [FACE_LAYER_THRESH];
+      for (let k = 1; k < L; k++) {
+        thresh.push(FACE_LAYER_THRESH * ((L - 1 - k) / (L - 1)));
+      }
+      this.depthThresh = thresh;
+      return;
+    }
+
+    type Cluster = { mean: number; min: number; max: number; orbits: Orbit[] };
+    const GAP = 0.12;
+    const clusters: Cluster[] = [];
+    for (const o of rest) {
+      const last = clusters[clusters.length - 1];
+      if (!last || last.mean - o.meanMax > GAP) {
+        clusters.push({ mean: o.meanMax, min: o.minMax, max: o.maxMax, orbits: [o] });
+      } else {
+        last.orbits.push(o);
+        last.min = Math.min(last.min, o.minMax);
+        last.max = Math.max(last.max, o.maxMax);
+        last.mean = last.orbits.reduce((s, x) => s + x.meanMax, 0) / last.orbits.length;
+      }
+    }
+
+    const target = L - 1;
+    const cs = clusters.map((c) => ({ ...c, orbits: [...c.orbits] }));
+    while (cs.length > target) {
+      let best = 0;
+      let bestGap = Infinity;
+      for (let i = 0; i < cs.length - 1; i++) {
+        const gap = cs[i].mean - cs[i + 1].mean;
+        if (gap < bestGap) {
+          bestGap = gap;
+          best = i;
+        }
+      }
+      const a = cs[best];
+      const b = cs[best + 1];
+      const merged = [...a.orbits, ...b.orbits];
+      cs.splice(best, 2, {
+        mean: merged.reduce((s, x) => s + x.meanMax, 0) / merged.length,
+        min: Math.min(a.min, b.min),
+        max: Math.max(a.max, b.max),
+        orbits: merged,
+      });
+    }
+    while (cs.length < target) {
+      const last = cs[cs.length - 1];
+      cs.push({ mean: last.min * 0.5, min: EQUATOR, max: last.min, orbits: [] });
+    }
+
+    const thresh: number[] = [FACE_LAYER_THRESH];
+    for (let k = 0; k < target - 1; k++) {
+      thresh.push((cs[k].min + cs[k + 1].max) / 2);
+    }
+    // Lower bound just below deepest complete orbit — excludes equator straddlers.
+    thresh.push(Math.max(EQUATOR, cs[target - 1].min - 0.02));
+    this.depthThresh = thresh;
   }
 
   /** No styleScale inflate — avoids full-color z-fighting; grooves come from inset. */
@@ -758,6 +961,8 @@ export class Megaminx extends PolyPuzzle {
   /**
    * Swipe → which face to turn (edge → side face / 棱→侧面).
    * For N=2 (corners only) and ring stickers, fall back to front-face turn.
+   * N≥4: depth from hit sticker / piece projection on the chosen turn axis
+   * (on-face stickers → depth 0; inner bands from adjacent-face stickers).
    */
   dragToMove(
     mesh: THREE.Mesh,
@@ -774,11 +979,13 @@ export class Megaminx extends PolyPuzzle {
     if (!front && !pieceId) return null;
 
     this.group.updateMatrixWorld(true);
+    const L = this.layerCount();
     const containing: PolyFace[] = [];
     if (pieceId) {
-      const pieceTiles = this.megaTiles.filter((t) => t.pieceId === pieceId);
       for (const f of this.faces) {
-        if (pieceTiles.some((t) => this.tileWorldCenter(t, this.scratch).dot(f.axis) > FACE_LAYER_THRESH)) {
+        const maxP = this.pieceMaxProjOnAxis(pieceId, f.axis);
+        // Outer face membership (N=2/3 + depth 0) or any inner band (N≥4).
+        if (maxP > FACE_LAYER_THRESH || (L > 1 && this.depthOfProjection(maxP) >= 0)) {
           containing.push(f);
         }
       }
@@ -864,20 +1071,63 @@ export class Megaminx extends PolyPuzzle {
 
     if (!bestFace || bestScore < 1e-6) return null;
     if (mesh.userData) mesh.userData.turnFace = bestFace.id;
-    return { kind: 'face', face: bestFace.id, steps: bestSteps };
+
+    // Depth on chosen turn axis: on-face hit → 0; else piece maxProj band.
+    let depth = 0;
+    if (L > 1) {
+      const hitProj = point.dot(bestFace.axis);
+      if (hitProj > FACE_LAYER_THRESH) {
+        depth = 0;
+      } else if (pieceId) {
+        depth = this.depthOfProjection(this.pieceMaxProjOnAxis(pieceId, bestFace.axis));
+        if (depth < 0) depth = this.depthOfProjection(hitProj);
+      } else {
+        depth = this.depthOfProjection(hitProj);
+      }
+      if (depth < 0) return null;
+    }
+
+    return {
+      kind: 'face',
+      face: bestFace.id,
+      steps: bestSteps,
+      ...(depth > 0 ? { depth } : {}),
+    };
   }
 
   /**
-   * Select stickers currently on the turned face (axis projection), then expand
+   * Select stickers in the move depth band along the face axis, then expand
    * to every sticker sharing those piece ids.
+   * Depth 0: on-face stickers (proj > FACE_LAYER_THRESH) — N=2/3 compatible.
+   * Depth k≥1: pieces whose maxProj falls in that inner band.
    */
   protected selectLayer(move: FaceTurnMove): PolyTile[] {
     this.group.updateMatrixWorld(true);
     const axis = this.faceOf(move.face).axis;
-    const onFace = this.megaTiles.filter(
-      (t) => this.tileWorldCenter(t, this.scratch).dot(axis) > FACE_LAYER_THRESH,
-    );
-    const pieces = new Set(onFace.map((t) => t.pieceId));
+    const depth = this.resolveDepth(move);
+
+    if (depth === 0) {
+      const onFace = this.megaTiles.filter(
+        (t) => this.tileWorldCenter(t, this.scratch).dot(axis) > FACE_LAYER_THRESH,
+      );
+      const pieces = new Set(onFace.map((t) => t.pieceId));
+      return this.megaTiles.filter((t) => pieces.has(t.pieceId));
+    }
+
+    // Inner band: by piece maxProj. Skip face-centers of other faces — they
+    // sit mid-projection but must stay fixed (only their own face turns them).
+    const pieceMax = new Map<string, { maxProj: number; kind: MegaTile['kind'] }>();
+    for (const t of this.megaTiles) {
+      const p = this.tileWorldCenter(t, this.scratch).dot(axis);
+      const cur = pieceMax.get(t.pieceId);
+      if (!cur) pieceMax.set(t.pieceId, { maxProj: p, kind: t.kind });
+      else cur.maxProj = Math.max(cur.maxProj, p);
+    }
+    const pieces = new Set<string>();
+    for (const [id, info] of pieceMax) {
+      if (info.kind === 'center') continue;
+      if (this.depthOfProjection(info.maxProj) === depth) pieces.add(id);
+    }
     return this.megaTiles.filter((t) => pieces.has(t.pieceId));
   }
 
@@ -887,6 +1137,77 @@ export class Megaminx extends PolyPuzzle {
 
   protected scrambleLength(): number {
     return 16 + this.order * 4;
+  }
+
+  /** Megaminx notation: U / U2 / U3 for depth 0 / 1 / 2 (no tip-lowercase). */
+  protected notation(m: FaceTurnMove): string {
+    const d = m.depth ?? 0;
+    const face = d > 0 ? `${m.face}${d + 1}` : m.face;
+    const abs = Math.abs(m.steps);
+    const twice = abs === 2 ? '2' : '';
+    return `${face}${twice}${m.steps < 0 ? "'" : ''}`;
+  }
+
+  getFaceButtons(): FaceButton[] {
+    const L = this.layerCount();
+    const buttons: FaceButton[] = [];
+    for (let depth = 0; depth < L; depth++) {
+      for (const f of this.faces) {
+        let label: string;
+        if (depth === 0) label = f.label;
+        else if (L === 2) label = `${f.label}层`;
+        else label = `${f.label}${depth + 1}`;
+        buttons.push({
+          id: f.id,
+          label,
+          color: f.colorCss,
+          ...(depth > 0 ? { depth } : {}),
+        });
+      }
+    }
+    return buttons;
+  }
+
+  /** Scramble: random face + random depth band (N≥4). */
+  async scramble(): Promise<void> {
+    if (this.isBusy()) return;
+    const L = this.layerCount();
+    if (L <= 1) {
+      await super.scramble();
+      return;
+    }
+    this.stopped = false;
+    this.locked = true;
+    this.emit({ type: 'busy', busy: true });
+    this.history = [];
+    this.emit({ type: 'move', notation: '', historyLen: 0 });
+    const length = this.scrambleLength();
+    const moves: FaceTurnMove[] = [];
+    let previous = '';
+    for (let i = 0; i < length; i++) {
+      let face = this.faces[Math.floor(Math.random() * this.faces.length)].id;
+      while (face === previous) face = this.faces[Math.floor(Math.random() * this.faces.length)].id;
+      previous = face;
+      const depth = Math.floor(Math.random() * L);
+      moves.push({
+        kind: 'face',
+        face,
+        steps: Math.random() < 0.5 ? 1 : -1,
+        ...(depth > 0 ? { depth } : {}),
+      });
+    }
+    this.emit({ type: 'scramble', text: moves.map((m) => this.notation(m)).join(' '), length });
+    this.emit({ type: 'status', message: `打乱中… (${length} 步)` });
+    try {
+      for (const m of moves) {
+        if (this.stopped) break;
+        await this.applyMove(m, true);
+      }
+      if (!this.stopped) this.emit({ type: 'status', message: `打乱完成 · ${length} 步` });
+    } finally {
+      this.locked = false;
+      this.emit({ type: 'busy', busy: false });
+    }
   }
 
   getFitDistance(): number {
@@ -923,7 +1244,12 @@ export class Megaminx extends PolyPuzzle {
     return 5 * Math.floor(N / 2) * Math.ceil(N / 2) + 1;
   }
 
-  /** Test helper: counts and C5 closure (no animation). */
+  /** Threshold accessors for verify scripts. */
+  debugThresholds(): number[] {
+    return [...this.depthThresh];
+  }
+
+  /** Test helper: counts and C5 closure per depth band (no animation). */
   debugVerifyLayers(): {
     tiles: number;
     perFace: number;
@@ -936,23 +1262,62 @@ export class Megaminx extends PolyPuzzle {
     fiveTurnClosed: boolean;
     pieceGraphOk: boolean;
     order: number;
+    depths: number;
+    bandCounts: number[];
+    bandClosed: boolean[];
+    bandFiveClosed: boolean[];
+    bandsDisjoint: boolean;
   } {
     this.group.updateMatrixWorld(true);
     const faceId = this.faces[0].id;
     const axis = this.faces[0].axis;
+    const L = this.layerCount();
     const selected = this.selectLayer({ kind: 'face', face: faceId, steps: 1 });
-    const slots = this.tiles.map((t) => this.tileWorldCenter(t).clone());
     const q = new THREE.Quaternion().setFromAxisAngle(axis, (Math.PI * 2) / 5);
-    const layerClosed = selected.every((t) => {
-      const dest = this.tileWorldCenter(t).applyQuaternion(q);
-      return slots.some((s) => s.distanceTo(dest) < 0.12);
-    });
-    let fiveTurnClosed = true;
-    for (const t of selected) {
-      const c = this.tileWorldCenter(t).clone();
-      for (let i = 0; i < 5; i++) c.applyQuaternion(q);
-      if (c.distanceTo(this.tileWorldCenter(t)) > 0.12) fiveTurnClosed = false;
+    const closed = (sel: PolyTile[]) => {
+      const selSlots = sel.map((t) => this.tileWorldCenter(t).clone());
+      return sel.every((t) => {
+        const dest = this.tileWorldCenter(t).applyQuaternion(q);
+        // Must land on another selected sticker (layer permutes within itself).
+        return selSlots.some((s) => s.distanceTo(dest) < 0.12);
+      });
+    };
+    const fiveClosed = (sel: PolyTile[]) => {
+      for (const t of sel) {
+        const c = this.tileWorldCenter(t).clone();
+        for (let i = 0; i < 5; i++) c.applyQuaternion(q);
+        if (c.distanceTo(this.tileWorldCenter(t)) > 0.12) return false;
+      }
+      return true;
+    };
+    const layerClosed = closed(selected);
+    const fiveTurnClosed = fiveClosed(selected);
+
+    const bandCounts: number[] = [];
+    const bandClosed: boolean[] = [];
+    const bandFiveClosed: boolean[] = [];
+    const bandSets: Set<PolyTile>[] = [];
+    for (let d = 0; d < L; d++) {
+      const sel = this.selectLayer({
+        kind: 'face',
+        face: faceId,
+        steps: 1,
+        ...(d > 0 ? { depth: d } : {}),
+      });
+      bandCounts.push(sel.length);
+      bandClosed.push(sel.length > 0 && closed(sel));
+      bandFiveClosed.push(sel.length > 0 && fiveClosed(sel));
+      bandSets.push(new Set(sel));
     }
+    let bandsDisjoint = true;
+    for (let i = 0; i < L; i++) {
+      for (let j = i + 1; j < L; j++) {
+        for (const t of bandSets[i]) {
+          if (bandSets[j].has(t)) bandsDisjoint = false;
+        }
+      }
+    }
+
     const kinds = { center: 0, edge: 0, corner: 0, ring: 0 };
     for (const t of this.megaTiles) kinds[t.kind]++;
 
@@ -1014,6 +1379,11 @@ export class Megaminx extends PolyPuzzle {
       fiveTurnClosed,
       pieceGraphOk,
       order: this.order,
+      depths: L,
+      bandCounts,
+      bandClosed,
+      bandFiveClosed,
+      bandsDisjoint,
     };
   }
 }

@@ -33,8 +33,8 @@ function reparent(obj, newParent) {
   obj.updateMatrix();
 }
 
-function applyInstant(face, steps) {
-  const move = { kind: 'face', face, steps };
+function applyInstant(face, steps, depth) {
+  const move = { kind: 'face', face, steps, ...(depth ? { depth } : {}) };
   const selected = m['selectLayer'](move);
   const axis = m['faceOf'](face).axis;
   const angle = m['turnAngle'](move);
@@ -470,8 +470,8 @@ function smokeMegaOrder(N) {
       return c.multiplyScalar(1 / attr.count).applyMatrix4(t.mesh.matrixWorld);
     });
   };
-  const apply = (face, steps) => {
-    const move = { kind: 'face', face, steps };
+  const apply = (face, steps, depth) => {
+    const move = { kind: 'face', face, steps, ...(depth ? { depth } : {}) };
     const selected = q['selectLayer'](move);
     const axis = q['faceOf'](face).axis;
     const angle = q['turnAngle'](move);
@@ -494,6 +494,38 @@ function smokeMegaOrder(N) {
   // Face counts must match on every face
   const faceOk = q['faces'].every((f) => q.stickersOnFace(f.id).length === expected);
 
+  const L = Math.max(1, Math.floor(N / 2));
+  let multiOk = vv.depths === L && vv.bandsDisjoint;
+  const bandLens = [];
+  for (let d = 0; d < L; d++) {
+    const sel = q['selectLayer']({ kind: 'face', face: 'U', steps: 1, ...(d ? { depth: d } : {}) });
+    bandLens.push(sel.length);
+    if (sel.length === 0 || !vv.bandClosed[d] || !vv.bandFiveClosed[d]) multiOk = false;
+    // Round-trip each depth band
+    const b0 = getCenters();
+    apply('U', 1, d || 0);
+    apply('U', -1, d || 0);
+    const a0 = getCenters();
+    let dRt = 0;
+    for (let i = 0; i < b0.length; i++) dRt = Math.max(dRt, b0[i].distanceTo(a0[i]));
+    if (dRt >= 0.05) multiOk = false;
+    // Five turns restore
+    const b5 = getCenters();
+    for (let i = 0; i < 5; i++) apply('U', 1, d || 0);
+    const a5 = getCenters();
+    let d5 = 0;
+    for (let i = 0; i < b5.length; i++) d5 = Math.max(d5, b5[i].distanceTo(a5[i]));
+    if (d5 >= 0.05) multiOk = false;
+  }
+  // Coverage after inner turn (N≥4)
+  let coverOk = true;
+  if (L > 1) {
+    q.reset();
+    apply('U', 1, 1);
+    coverOk = q['faces'].every((f) => q.stickersOnFace(f.id).length === expected);
+    q.reset();
+  }
+
   const ok =
     vv.order === N &&
     vv.perFace === expected &&
@@ -504,17 +536,25 @@ function smokeMegaOrder(N) {
     vv.layerClosed &&
     vv.fiveTurnClosed &&
     vv.pieceGraphOk &&
-    rt < 0.05;
+    rt < 0.05 &&
+    multiOk &&
+    coverOk;
   console.log('smokeMega', N, {
     perFace: vv.perFace,
     expected,
     layer: layer.length,
+    depths: vv.depths,
+    bandCounts: vv.bandCounts,
+    bandClosed: vv.bandClosed,
+    bandsDisjoint: vv.bandsDisjoint,
     centers: vv.centers,
     edges: vv.edges,
     corners: vv.corners,
     rings: vv.rings,
     pieceGraphOk: vv.pieceGraphOk,
     faceOk,
+    multiOk,
+    coverOk,
     rt,
     ok,
   });
@@ -659,6 +699,89 @@ function assertEvenParallelCuts(N) {
 const parallelCut4 = assertEvenParallelCuts(4);
 const parallelCut6 = assertEvenParallelCuts(6);
 
+// --- Multi-slice depth bands (N≥4): independent turns, closed orbits ---
+function assertMultiDepth(N) {
+  const q = new Megaminx(N, 'sticker');
+  const vv = q.debugVerifyLayers();
+  const L = Math.max(1, Math.floor(N / 2));
+  const expected = q.expectedPerFace();
+  if (vv.depths !== L) {
+    console.error('multiDepth', N, 'depths', vv.depths, 'expected', L);
+    return false;
+  }
+  if (!vv.bandsDisjoint) {
+    console.error('multiDepth', N, 'bands overlap');
+    return false;
+  }
+  for (let d = 0; d < L; d++) {
+    if (!vv.bandCounts[d] || !vv.bandClosed[d] || !vv.bandFiveClosed[d]) {
+      console.error('multiDepth', N, 'band', d, {
+        count: vv.bandCounts[d],
+        closed: vv.bandClosed[d],
+        five: vv.bandFiveClosed[d],
+      });
+      return false;
+    }
+  }
+  // Buttons expose L * 12 faces
+  const buttons = q.getFaceButtons();
+  if (buttons.length !== L * 12) {
+    console.error('multiDepth', N, 'buttons', buttons.length, 'expected', L * 12);
+    return false;
+  }
+  // Inner depth turn must not empty face sticker counts permanently after restore
+  const apply = (face, steps, depth) => {
+    const move = { kind: 'face', face, steps, ...(depth ? { depth } : {}) };
+    const selected = q['selectLayer'](move);
+    const axis = q['faceOf'](face).axis;
+    const angle = q['turnAngle'](move);
+    const pivot = q['pivot'];
+    pivot.rotation.set(0, 0, 0);
+    for (const tile of selected) reparent(tile.mesh, pivot);
+    pivot.setRotationFromAxisAngle(axis, angle);
+    q.group.updateMatrixWorld(true);
+    for (const tile of selected) reparent(tile.mesh, q.group);
+    pivot.rotation.set(0, 0, 0);
+    return selected.length;
+  };
+  if (L > 1) {
+    q.reset();
+    const n1 = apply('U', 1, 1);
+    if (n1 !== vv.bandCounts[1]) {
+      console.error('multiDepth', N, 'inner select size', n1, vv.bandCounts[1]);
+      return false;
+    }
+    apply('U', -1, 1);
+    const faceOk = q['faces'].every((f) => q.stickersOnFace(f.id).length === expected);
+    if (!faceOk) {
+      console.error('multiDepth', N, 'coverage after inner round-trip');
+      return false;
+    }
+    // Outer and inner must select different piece sets
+    const outer = new Set(q['selectLayer']({ kind: 'face', face: 'U', steps: 1 }).map((t) => t.pieceId));
+    const inner = new Set(
+      q['selectLayer']({ kind: 'face', face: 'U', steps: 1, depth: 1 }).map((t) => t.pieceId),
+    );
+    let overlap = 0;
+    for (const id of outer) if (inner.has(id)) overlap++;
+    if (overlap !== 0) {
+      console.error('multiDepth', N, 'outer/inner piece overlap', overlap);
+      return false;
+    }
+  }
+  console.log('multiDepth', N, {
+    L,
+    bandCounts: vv.bandCounts,
+    thresh: q.debugThresholds().map((t) => +t.toFixed(4)),
+    buttons: buttons.length,
+    ok: true,
+  });
+  return true;
+}
+const multiDepth4 = assertMultiDepth(4);
+const multiDepth5 = assertMultiDepth(5);
+const multiDepth6 = assertMultiDepth(6);
+
 const smokeMega2 = smokeMegaOrder(2);
 const smokeMega4 = smokeMegaOrder(4);
 const smokeMega5 = smokeMegaOrder(5);
@@ -695,7 +818,10 @@ const pass =
   smokeMega6 &&
   smokeMega7 &&
   parallelCut4 &&
-  parallelCut6;
+  parallelCut6 &&
+  multiDepth4 &&
+  multiDepth5 &&
+  multiDepth6;
 
 console.log({
   nLayer,
@@ -714,6 +840,9 @@ console.log({
   dragScoringOk,
   parallelCut4,
   parallelCut6,
+  multiDepth4,
+  multiDepth5,
+  multiDepth6,
 });
 console.log(pass ? 'PASS' : 'FAIL');
 process.exit(pass ? 0 : 1);
