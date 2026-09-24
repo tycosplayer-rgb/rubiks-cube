@@ -1,5 +1,5 @@
 /**
- * Headless Megaminx parallel-lattice / layer checks (N≥4 lattice + N=5 Gigaminx; no WebGL).
+ * Headless Megaminx checks (N=4 black ★; N≥5 parallel lattice / Gigaminx; no WebGL).
  * Run: npm run verify:megaminx
  */
 import { Megaminx } from '../src/cube/Megaminx.ts';
@@ -562,7 +562,7 @@ function smokeMegaOrder(N) {
 }
 
 
-// --- Parallel lattice (N≥4): N stickers/edge, filled center, no star void ---
+// --- Parallel lattice (N≥5): N stickers/edge, filled center, no star void ---
 function assertParallelCuts(N) {
   const q = new Megaminx(N, 'sticker');
   q.group.updateMatrixWorld(true);
@@ -696,7 +696,189 @@ function assertParallelCuts(N) {
   console.log('parallelCut', N, { facesOk, expected, ok });
   return ok;
 }
-const parallelCut4 = assertParallelCuts(4);
+// --- N=4 star: tips → edge midpoints AND tips reach outer edges (挨到棱) ---
+function assertEvenStarOrientation(N) {
+  const q = new Megaminx(N, 'sticker');
+  q.group.updateMatrixWorld(true);
+  let facesOk = 0;
+  const v = new THREE.Vector3();
+  for (const face of q['faces']) {
+    const axis = face.axis.clone().normalize();
+    const onFace = q.stickersOnFace(face.id);
+    const faceC = new THREE.Vector3();
+    for (const t of onFace) faceC.add(q['tileWorldCenter'](t));
+    faceC.multiplyScalar(1 / onFace.length);
+
+    const ref = Math.abs(axis.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    const xAxis = new THREE.Vector3().crossVectors(axis, ref).normalize();
+    const yAxis = new THREE.Vector3().crossVectors(axis, xAxis).normalize();
+
+    const angOf = (p) => {
+      const radial = p.clone().sub(faceC);
+      radial.addScaledVector(axis, -radial.dot(axis));
+      return {
+        r: radial.length(),
+        ang: Math.atan2(radial.dot(yAxis), radial.dot(xAxis)),
+        p: p.clone(),
+      };
+    };
+    const angDist = (a, b) => {
+      let d = Math.abs(a - b) % (Math.PI * 2);
+      if (d > Math.PI) d = Math.PI * 2 - d;
+      return d;
+    };
+
+    const corners = onFace.filter((t) => t.kind === 'corner');
+    const rings = onFace.filter((t) => t.kind === 'ring');
+    const edges = onFace.filter((t) => t.kind === 'edge');
+    const centers = onFace.filter((t) => t.kind === 'center');
+    if (centers.length !== 0 || corners.length !== 5 || rings.length < 5) {
+      console.error('starOrient', N, face.id, 'bad counts', {
+        centers: centers.length,
+        corners: corners.length,
+        rings: rings.length,
+        edges: edges.length,
+        total: onFace.length,
+      });
+      return false;
+    }
+    if (onFace.length !== q.expectedPerFace()) {
+      console.error('starOrient', N, face.id, 'perFace', onFace.length, q.expectedPerFace());
+      return false;
+    }
+
+    const outerVerts = [];
+    for (const t of corners) {
+      const attr = t.mesh.geometry.getAttribute('position');
+      let best = null;
+      let bestR = -1;
+      for (let i = 0; i < attr.count; i++) {
+        v.fromBufferAttribute(attr, i).applyMatrix4(t.mesh.matrixWorld);
+        const a = angOf(v);
+        if (a.r > bestR) {
+          bestR = a.r;
+          best = a;
+        }
+      }
+      outerVerts.push(best);
+    }
+    outerVerts.sort((a, b) => a.ang - b.ang);
+    const vertexAngs = outerVerts.map((o) => o.ang);
+    const midAngs = vertexAngs.map((a, i) => {
+      let b = vertexAngs[(i + 1) % 5];
+      if (b < a) b += Math.PI * 2;
+      let m = (a + b) / 2;
+      if (m > Math.PI) m -= Math.PI * 2;
+      if (m <= -Math.PI) m += Math.PI * 2;
+      return m;
+    });
+    const edgeMids = outerVerts.map((a, i) => {
+      const b = outerVerts[(i + 1) % 5];
+      return a.p.clone().lerp(b.p, 0.5);
+    });
+
+    // Tips = sticker verts closest to each outer-edge midpoint (ring+edge).
+    const allSamples = [];
+    for (const t of [...rings, ...edges]) {
+      const attr = t.mesh.geometry.getAttribute('position');
+      for (let i = 0; i < attr.count; i++) {
+        v.fromBufferAttribute(attr, i).applyMatrix4(t.mesh.matrixWorld);
+        allSamples.push(angOf(v));
+      }
+    }
+    const tips = [];
+    for (let ei = 0; ei < 5; ei++) {
+      const mid = edgeMids[ei];
+      let best = null;
+      let bestD = Infinity;
+      for (const s of allSamples) {
+        const d = s.p.distanceTo(mid);
+        if (d < bestD) {
+          bestD = d;
+          best = s;
+        }
+      }
+      if (!best) {
+        console.error('starOrient', N, face.id, 'no tip near mid', ei);
+        return false;
+      }
+      tips.push(best);
+    }
+
+    let alignMid = 0;
+    for (const t of tips) {
+      const dMid = Math.min(...midAngs.map((m) => angDist(t.ang, m)));
+      const dVert = Math.min(...vertexAngs.map((m) => angDist(t.ang, m)));
+      if (dMid < dVert) alignMid++;
+    }
+    if (alignMid < 5) {
+      console.error('starOrient', N, face.id, {
+        alignMid,
+        tipAngs: tips.map((t) => +t.ang.toFixed(3)),
+        note: 'star tips must aim at edge midpoints',
+      });
+      return false;
+    }
+
+    const TIP_EDGE_TOL = 0.08;
+    for (let i = 0; i < 5; i++) {
+      const tip = tips[i];
+      let bestEdge = 0;
+      let bestD = Infinity;
+      for (let e = 0; e < 5; e++) {
+        const d = angDist(tip.ang, midAngs[e]);
+        if (d < bestD) {
+          bestD = d;
+          bestEdge = e;
+        }
+      }
+      const a = outerVerts[bestEdge].p;
+      const b = outerVerts[(bestEdge + 1) % 5].p;
+      const ab = b.clone().sub(a);
+      const ap = tip.p.clone().sub(a);
+      const u = Math.max(0, Math.min(1, ap.dot(ab) / ab.lengthSq()));
+      const proj = a.clone().addScaledVector(ab, u);
+      const dist = tip.p.distanceTo(proj);
+      if (dist > TIP_EDGE_TOL) {
+        console.error('starOrient', N, face.id, {
+          tipEdgeDist: +dist.toFixed(4),
+          tipR: +tip.r.toFixed(4),
+          tol: TIP_EDGE_TOL,
+          note: 'star tips must reach outer edges (挨到棱)',
+        });
+        return false;
+      }
+    }
+
+    const dentR = Math.max(
+      ...corners.map((t) => {
+        const attr = t.mesh.geometry.getAttribute('position');
+        let minR = Infinity;
+        for (let i = 0; i < attr.count; i++) {
+          v.fromBufferAttribute(attr, i).applyMatrix4(t.mesh.matrixWorld);
+          minR = Math.min(minR, angOf(v).r);
+        }
+        return minR;
+      }),
+    );
+    const tipR = Math.min(...tips.map((t) => t.r));
+    if (!(dentR < tipR) || !(tipR > dentR * 2.0)) {
+      console.error('starOrient', N, face.id, {
+        tipR: +tipR.toFixed(4),
+        dentR: +dentR.toFixed(4),
+        ratio: +(tipR / dentR).toFixed(3),
+        note: 'dent radius must be < tip radius (sharper ★; 内角往中心缩)',
+      });
+      return false;
+    }
+    facesOk++;
+  }
+  const ok = facesOk === 12;
+  console.log('starOrient', N, { facesOk, ok, expected: q.expectedPerFace() });
+  return ok;
+}
+
+const starOrient4 = assertEvenStarOrientation(4);
 const parallelCut5 = assertParallelCuts(5);
 const parallelCut6 = assertParallelCuts(6);
 const parallelCut7 = assertParallelCuts(7);
@@ -833,7 +1015,7 @@ function assertMultiDepth(N) {
       console.error('multiDepth', N, 'outer/inner piece overlap', overlap);
       return false;
     }
-    // N=4 Master Kilominx: outer = full face (31 pieces → 51 tiles with wing stickers);
+    // N=4 star / N≥5 lattice: outer band must cover at least expected on-face stickers;
     // inner = non-empty belt, no U-face stickers in selection.
     if (N === 4 || N === 5) {
       if (vv.bandCounts[0] < expected) {
@@ -915,7 +1097,7 @@ const pass =
   smokeMega5 &&
   smokeMega6 &&
   smokeMega7 &&
-  parallelCut4 &&
+  starOrient4 &&
   parallelCut5 &&
   parallelCut6 &&
   parallelCut7 &&
@@ -938,7 +1120,7 @@ console.log({
   resolveAfterMoves,
   staleTrapOk,
   dragScoringOk,
-  parallelCut4,
+  starOrient4,
   parallelCut5,
   parallelCut6,
   parallelCut7,
