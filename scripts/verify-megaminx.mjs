@@ -520,6 +520,127 @@ function smokeMegaOrder(N) {
   });
   return ok;
 }
+
+// --- Even-N star orientation: tips → edge midpoints (not vertices) ---
+// Each ring sticker's two innermost verts lie on the star boundary. Among those,
+// the farthest-from-center verts are the tips — they must align with edge mids.
+function assertEvenStarOrientation(N) {
+  const q = new Megaminx(N, 'sticker');
+  q.group.updateMatrixWorld(true);
+  let facesOk = 0;
+  for (const face of q['faces']) {
+    const axis = face.axis.clone().normalize();
+    const onFace = q.stickersOnFace(face.id);
+    const faceC = new THREE.Vector3();
+    for (const t of onFace) faceC.add(q['tileWorldCenter'](t));
+    faceC.multiplyScalar(1 / onFace.length);
+
+    const ref = Math.abs(axis.y) < 0.9 ? new THREE.Vector3(0, 1, 0) : new THREE.Vector3(1, 0, 0);
+    const xAxis = new THREE.Vector3().crossVectors(axis, ref).normalize();
+    const yAxis = new THREE.Vector3().crossVectors(axis, xAxis).normalize();
+
+    const angOf = (p) => {
+      const radial = p.clone().sub(faceC);
+      radial.addScaledVector(axis, -radial.dot(axis));
+      return { r: radial.length(), ang: Math.atan2(radial.dot(yAxis), radial.dot(xAxis)) };
+    };
+    const angDist = (a, b) => {
+      let d = Math.abs(a - b) % (Math.PI * 2);
+      if (d > Math.PI) d = Math.PI * 2 - d;
+      return d;
+    };
+
+    const corners = onFace.filter((t) => t.kind === 'corner');
+    const rings = onFace.filter((t) => t.kind === 'ring');
+    if (corners.length !== 5 || rings.length < 5) {
+      console.error('starOrient', N, face.id, 'bad counts', {
+        corners: corners.length,
+        rings: rings.length,
+      });
+      return false;
+    }
+
+    const vertexAngs = corners
+      .map((t) => angOf(q['tileWorldCenter'](t)).ang)
+      .sort((a, b) => a - b);
+    const midAngs = vertexAngs.map((a, i) => {
+      let b = vertexAngs[(i + 1) % 5];
+      if (b < a) b += Math.PI * 2;
+      let m = (a + b) / 2;
+      if (m > Math.PI) m -= Math.PI * 2;
+      if (m <= -Math.PI) m += Math.PI * 2;
+      return m;
+    });
+
+    // Star-boundary samples = 2 innermost verts of every ring sticker.
+    const starBound = [];
+    const v = new THREE.Vector3();
+    for (const t of rings) {
+      const attr = t.mesh.geometry.getAttribute('position');
+      const tv = [];
+      for (let i = 0; i < attr.count; i++) {
+        v.fromBufferAttribute(attr, i).applyMatrix4(t.mesh.matrixWorld);
+        tv.push(angOf(v));
+      }
+      tv.sort((a, b) => a.r - b.r);
+      starBound.push(tv[0], tv[1]);
+    }
+    // Tips = farthest star-boundary samples, clustered by angle (5 expected).
+    starBound.sort((a, b) => b.r - a.r);
+    const tips = [];
+    for (const s of starBound) {
+      if (tips.some((t) => angDist(t.ang, s.ang) < 0.35)) continue;
+      tips.push(s);
+      if (tips.length >= 5) break;
+    }
+    if (tips.length < 5) {
+      console.error('starOrient', N, face.id, 'fewer than 5 tips', tips.length);
+      return false;
+    }
+
+    let alignMid = 0;
+    for (const t of tips) {
+      const dMid = Math.min(...midAngs.map((m) => angDist(t.ang, m)));
+      const dVert = Math.min(...vertexAngs.map((m) => angDist(t.ang, m)));
+      if (dMid < dVert) alignMid++;
+    }
+    if (alignMid < 5) {
+      console.error('starOrient', N, face.id, {
+        alignMid,
+        tipAngs: tips.map((t) => +t.ang.toFixed(3)),
+        midAngs: midAngs.map((a) => +a.toFixed(3)),
+        vertexAngs: vertexAngs.map((a) => +a.toFixed(3)),
+        note: 'star tips must aim at edge midpoints',
+      });
+      return false;
+    }
+
+    // Also: tip radius must exceed corner-notch (dent) radius.
+    const dentR = Math.max(
+      ...corners.map((t) => {
+        const attr = t.mesh.geometry.getAttribute('position');
+        let minR = Infinity;
+        for (let i = 0; i < attr.count; i++) {
+          v.fromBufferAttribute(attr, i).applyMatrix4(t.mesh.matrixWorld);
+          minR = Math.min(minR, angOf(v).r);
+        }
+        return minR;
+      }),
+    );
+    const tipR = Math.min(...tips.map((t) => t.r));
+    if (!(tipR > dentR * 1.2)) {
+      console.error('starOrient', N, face.id, { tipR, dentR, note: 'tips farther out than dents' });
+      return false;
+    }
+    facesOk++;
+  }
+  const ok = facesOk === 12;
+  console.log('starOrient', N, { facesOk, ok });
+  return ok;
+}
+const starOrient4 = assertEvenStarOrientation(4);
+const starOrient6 = assertEvenStarOrientation(6);
+
 const smokeMega2 = smokeMegaOrder(2);
 const smokeMega4 = smokeMegaOrder(4);
 const smokeMega5 = smokeMegaOrder(5);
@@ -554,7 +675,9 @@ const pass =
   smokeMega4 &&
   smokeMega5 &&
   smokeMega6 &&
-  smokeMega7;
+  smokeMega7 &&
+  starOrient4 &&
+  starOrient6;
 
 console.log({
   nLayer,
@@ -571,6 +694,8 @@ console.log({
   resolveAfterMoves,
   staleTrapOk,
   dragScoringOk,
+  starOrient4,
+  starOrient6,
 });
 console.log(pass ? 'PASS' : 'FAIL');
 process.exit(pass ? 0 : 1);

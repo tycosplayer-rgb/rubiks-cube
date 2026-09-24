@@ -13,9 +13,9 @@ const IDS = ['U', 'R', 'FR', 'DR', 'D', 'DL', 'L', 'FL', 'BR', 'B', 'BL', 'DB'];
 const INNER_SCALE_N3 = 0.40;
 /** Corner tip depth along each outer edge (fraction of edge length from the vertex). */
 const CORNER_EDGE_T = 0.32;
-/** Even-N star tip radius (fraction from face center toward vertex). */
+/** Even-N star tip radius (fraction from face center toward edge midpoint). */
 const STAR_TIP_SCALE = 0.44;
-/** Even-N star dent radius (fraction from face center toward edge midpoint). */
+/** Even-N star dent radius (fraction from face center toward vertex). */
 const STAR_DENT_SCALE = 0.20;
 /** Even-N split between inner ring band and outer edge band (0=at star, 1=at outer edge). */
 const STAR_BAND_T = 0.48;
@@ -49,8 +49,8 @@ interface MegaTile extends PolyTile {
  * N=3: classic star-cut (1 center + 5 edges + 5 corners).
  * N=2: Junior-like corners only.
  * N≥4 odd: barycentric sector grid with fixed center pentagon + rings.
- * N≥4 even: star-cut — black five-pointed star void (tips→vertices), colored
- *       pieces in the bays; outer has N stickers/side (N−2 mid-edges).
+ * N≥4 even: star-cut — black five-pointed star void (tips→edge midpoints),
+ *       colored pieces in the bays; outer has N stickers/side (N−2 mid-edges).
  * Face turns 72°; one outer face layer per turn (whole on-face stickers + piece expand).
  */
 export class Megaminx extends PolyPuzzle {
@@ -123,7 +123,7 @@ export class Megaminx extends PolyPuzzle {
     }));
 
     // Even orders: near-black core so the star-shaped sticker void reads as a
-    // solid black ★ (tips→vertices). Odd/N=3 keep neutral gray plastic.
+    // solid black ★ (tips→edge midpoints). Odd/N=3 keep neutral gray plastic.
     const coreColor = this.order % 2 === 0 ? 0x0a0a0a : 0x8b929c;
     this.core = new THREE.Mesh(
       new THREE.DodecahedronGeometry(CORE_RADIUS, 0),
@@ -257,9 +257,9 @@ export class Megaminx extends PolyPuzzle {
    *
    * Even N: explicit star-cut (generalizes N=3 INNER_SCALE / CORNER_EDGE_T):
    * - Innermost five-pointed star region has NO colored facelets so the
-   *   near-black core shows through as a ★ (tips→vertices), matching the
-   *   SENGSO-style 四阶五魔方 reference.
-   * - 2 face-local ring stickers per edge-bay nestle into the star valleys.
+   *   near-black core shows through as a ★ (tips→edge midpoints), matching
+   *   classic Megaminx / SENGSO 四阶五魔方 orientation (corners in notches).
+   * - 2 face-local ring stickers per edge-bay wrap around each star tip.
    * - Outer band: 5 corners + (N−2) mid-edge stickers/side (exactly N along edge).
    * - Extra intermediate ring bands for N≥6 between star bay and outer band.
    */
@@ -341,7 +341,7 @@ export class Megaminx extends PolyPuzzle {
   }
 
   /**
-   * Even N: star-cut face. Black star void (tips→vertices) + bay rings + outer.
+   * Even N: star-cut face. Black star void (tips→edge midpoints) + bay rings + outer.
    * N=4: 5 corners + 10 mid-edges + 10 bay rings = 25 colored stickers/face.
    * N=6: same star + extra intermediate rings so edge shows 6 stickers.
    */
@@ -355,19 +355,22 @@ export class Megaminx extends PolyPuzzle {
     edgeId: (a: THREE.Vector3, b: THREE.Vector3) => string,
     addPoly: (poly: THREE.Vector3[], pieceId: string, kind: MegaTile['kind']) => void,
   ): void {
-    const tip = points.map((p) => c.clone().lerp(p, STAR_TIP_SCALE));
-    const dent: THREE.Vector3[] = [];
+    // Classic orientation: tips toward edge midpoints M[i]=lerp(V[i],V[i+1],0.5);
+    // dents toward vertices (corners sit in the notches between star points).
+    // Equivalent to a π/5 (36°) offset relative to vertex-aimed rays.
+    const dent = points.map((p) => c.clone().lerp(p, STAR_DENT_SCALE));
+    const tip: THREE.Vector3[] = [];
     for (let i = 0; i < 5; i++) {
       const mid = points[i].clone().lerp(points[(i + 1) % 5], 0.5);
-      dent.push(c.clone().lerp(mid, STAR_DENT_SCALE));
+      tip.push(c.clone().lerp(mid, STAR_TIP_SCALE));
     }
 
     // Star void: no colored facelets inside tip/dent outline — black core shows
-    // through as a five-pointed ★ (tips toward vertices).
+    // through as a five-pointed ★ (tips toward edge midpoints).
 
     const onEdge = (a: THREE.Vector3, b: THREE.Vector3, t: number) => a.clone().lerp(b, t);
 
-    // Corners: same family as N=3 (inner point = star tip).
+    // Corners: nestle into star notches (inner point = dent toward vertex).
     for (let i = 0; i < 5; i++) {
       const i0 = (i + 4) % 5;
       const i1 = (i + 1) % 5;
@@ -375,7 +378,7 @@ export class Megaminx extends PolyPuzzle {
       const cutNext = onEdge(Vi, points[i1], 1 / N);
       const cutPrev = onEdge(Vi, points[i0], 1 / N);
       addPoly(
-        [Vi, cutNext, tip[i], cutPrev],
+        [Vi, cutNext, dent[i], cutPrev],
         `corner:${vertId.get(raw[i])}`,
         'corner',
       );
@@ -395,24 +398,25 @@ export class Megaminx extends PolyPuzzle {
       const i1 = (i + 1) % 5;
       const Vi = points[i];
       const Vi1 = points[i1];
-      const T0 = tip[i];
-      const T1 = tip[i1];
-      const D = dent[i];
+      // Bay star boundary: dent@Vi — tip@edgeMid — dent@Vi1 (tip points into edge).
+      const L = dent[i];
+      const T = tip[i];
+      const R = dent[i1];
 
       // Outer-edge cut points at k/N (corners own 0 and N; mid-edges own 1..N-2).
       const E: THREE.Vector3[] = [];
       for (let k = 1; k <= N - 1; k++) E.push(onEdge(Vi, Vi1, k / N));
 
-      // Star-boundary polyline for this bay: T0 — D — T1.
+      // Star-boundary polyline for this bay: L — T — R.
       // Map each outer cut E[k] back to a point on that polyline by normalized t.
       const onStar = (tEdge: number): THREE.Vector3 => {
-        // tEdge in [1/N, (N-1)/N]; midpoint 0.5 → D, near 1/N → T0, near (N-1)/N → T1
+        // tEdge in [1/N, (N-1)/N]; midpoint 0.5 → tip, near ends → dents at vertices
         if (tEdge <= 0.5) {
           const u = (tEdge - 1 / N) / (0.5 - 1 / N);
-          return T0.clone().lerp(D, Math.min(1, Math.max(0, u)));
+          return L.clone().lerp(T, Math.min(1, Math.max(0, u)));
         }
         const u = (tEdge - 0.5) / ((N - 1) / N - 0.5);
-        return D.clone().lerp(T1, Math.min(1, Math.max(0, u)));
+        return T.clone().lerp(R, Math.min(1, Math.max(0, u)));
       };
 
       // Build concentric polylines at each split (and at the outer edge).
