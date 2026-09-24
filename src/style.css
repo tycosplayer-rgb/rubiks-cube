@@ -89,15 +89,19 @@ body,
 }
 
 .controls {
+  display: grid;
+  gap: 8px;
+}
+
+.control-row {
   display: flex;
   flex-wrap: wrap;
   gap: 6px;
   align-items: center;
 }
 
-/* Keep the two wrapped desktop control rows on one line at 960px+. */
-.controls > button {
-  padding-inline: 8px;
+.mode-controls {
+  gap: 8px;
 }
 
 label.ctrl {
@@ -303,14 +307,11 @@ button.ghost {
   .top-bar {
     align-items: stretch;
   }
-  .controls {
+  .control-row {
     justify-content: flex-start;
     gap: 8px;
   }
   button {
-    padding: 10px 12px;
-  }
-  .controls > button {
     padding: 10px 12px;
   }
   .title span {
@@ -342,7 +343,8 @@ button.ghost {
   border-radius: 0;
   background: transparent;
   color: var(--muted);
-  padding: 8px 8px;
+  min-width: 0;
+  padding: 6px 9px;
   font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
@@ -372,7 +374,8 @@ button.ghost {
   border-radius: 0;
   background: transparent;
   color: var(--muted);
-  padding: 8px 8px;
+  min-width: 0;
+  padding: 6px 9px;
   font-size: 0.85rem;
   font-weight: 600;
   cursor: pointer;
@@ -397,13 +400,9 @@ button.ghost {
 }
 
 @media (max-width: 640px) {
-  .mode-toggle {
-    width: 100%;
-  }
   .mode-btn,
   .style-btn {
-    flex: 1;
-    padding: 10px 8px;
+    padding: 8px 10px;
   }
 }
 
