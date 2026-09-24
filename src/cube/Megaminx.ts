@@ -55,11 +55,11 @@ export class Megaminx extends PolyPuzzle {
   private readonly megaTiles: MegaTile[] = [];
   private readonly scratch = new THREE.Vector3();
   /**
-   * Cuts between depth bands along a face axis (solved-state, high→low).
+   * Equal-width parallel-slab cuts along a face axis (high→low).
    * Length = L = ⌊N/2⌋:
    *   depth 0: d > thresh[0]  (thresh[0] = FACE_LAYER_THRESH)
    *   depth k: thresh[k] < d ≤ thresh[k-1]
-   * Deepest band lower-bounded by thresh[L-1] (~0 / equator).
+   * Deepest band lower-bounded by thresh[L-1] = 0 (equator).
    */
   private depthThresh: number[] = [FACE_LAYER_THRESH];
 
@@ -115,10 +115,18 @@ export class Megaminx extends PolyPuzzle {
   }
 
   /**
-   * Build depthThresh from solved-state piece orbits about faces[0].axis.
-   * Depth 0 cut stays FACE_LAYER_THRESH. Inner bands are unions of complete
-   * 72° orbits of non-center pieces fully in the upper hemisphere (so a slice
-   * never straddles the equator or moves another face's center).
+   * Build depthThresh as equal-width geometric slabs parallel to the face
+   * (Master Kilominx / Gigaminx SSE layer model).
+   *
+   * Region from the outer-face cut (FACE_LAYER_THRESH) down to the equator
+   * (proj≈0) is partitioned into (L−1) equal-width bands for depths 1..L−1.
+   * Depth 0 stays the outer face (stickers with proj > FACE_LAYER_THRESH).
+   *
+   *   depth 0: d > thresh[0]   (thresh[0] = FACE_LAYER_THRESH)
+   *   depth k: thresh[k] < d ≤ thresh[k−1]
+   * Deepest lower bound thresh[L−1] = 0 (equator).
+   *
+   * Cuts are constant projection on the face axis — NOT 72° orbit clustering.
    */
   private computeDepthThresholds(): void {
     const L = this.layerCount();
@@ -126,147 +134,12 @@ export class Megaminx extends PolyPuzzle {
       this.depthThresh = [FACE_LAYER_THRESH];
       return;
     }
-    this.group.updateMatrixWorld(true);
-    const axis = this.faces[0].axis;
-    const q = new THREE.Quaternion().setFromAxisAngle(axis, (Math.PI * 2) / 5);
-
-    type PieceInfo = {
-      id: string;
-      cen: THREE.Vector3;
-      maxProj: number;
-      kind: MegaTile['kind'];
-    };
-    const byId = new Map<string, PieceInfo>();
-    for (const t of this.megaTiles) {
-      const c = this.tileWorldCenter(t, this.scratch).clone();
-      const cur = byId.get(t.pieceId);
-      if (!cur) {
-        byId.set(t.pieceId, {
-          id: t.pieceId,
-          cen: c.clone(),
-          maxProj: c.dot(axis),
-          kind: t.kind,
-        });
-      } else {
-        cur.cen.add(c);
-        cur.maxProj = Math.max(cur.maxProj, c.dot(axis));
-      }
-    }
-    // Finalize centroids (edge=2 stickers, corner=3, ring/center=1).
-    const stickerCount = new Map<string, number>();
-    for (const t of this.megaTiles) {
-      stickerCount.set(t.pieceId, (stickerCount.get(t.pieceId) ?? 0) + 1);
-    }
-    for (const p of byId.values()) {
-      p.cen.multiplyScalar(1 / (stickerCount.get(p.id) ?? 1));
-    }
-    const list = [...byId.values()];
-
-    // Group into 72° orbits.
-    const TOL = 0.15;
-    const used = new Set<string>();
-    type Orbit = { members: PieceInfo[]; meanMax: number; minMax: number; maxMax: number };
-    const orbits: Orbit[] = [];
-    for (const p of list) {
-      if (used.has(p.id)) continue;
-      const members: PieceInfo[] = [p];
-      used.add(p.id);
-      let cur = p.cen.clone();
-      for (let step = 0; step < 4; step++) {
-        cur.applyQuaternion(q);
-        let best: PieceInfo | null = null;
-        let bestD = TOL;
-        for (const o of list) {
-          if (used.has(o.id)) continue;
-          const d = o.cen.distanceTo(cur);
-          if (d < bestD) {
-            bestD = d;
-            best = o;
-          }
-        }
-        if (!best) break;
-        members.push(best);
-        used.add(best.id);
-        cur = best.cen.clone();
-      }
-      const maxes = members.map((m) => m.maxProj);
-      orbits.push({
-        members,
-        meanMax: maxes.reduce((s, x) => s + x, 0) / maxes.length,
-        minMax: Math.min(...maxes),
-        maxMax: Math.max(...maxes),
-      });
-    }
-
-    // Inner candidates: non-center orbits fully above a small equator margin
-    // and at or below the outer-face cut.
-    const EQUATOR = 0.08;
-    const rest = orbits
-      .filter(
-        (o) =>
-          o.members.every((m) => m.kind !== 'center') &&
-          o.minMax > EQUATOR &&
-          o.maxMax <= FACE_LAYER_THRESH + 1e-6,
-      )
-      .sort((a, b) => b.meanMax - a.meanMax);
-
-    if (!rest.length) {
-      const thresh: number[] = [FACE_LAYER_THRESH];
-      for (let k = 1; k < L; k++) {
-        thresh.push(FACE_LAYER_THRESH * ((L - 1 - k) / (L - 1)));
-      }
-      this.depthThresh = thresh;
-      return;
-    }
-
-    type Cluster = { mean: number; min: number; max: number; orbits: Orbit[] };
-    const GAP = 0.12;
-    const clusters: Cluster[] = [];
-    for (const o of rest) {
-      const last = clusters[clusters.length - 1];
-      if (!last || last.mean - o.meanMax > GAP) {
-        clusters.push({ mean: o.meanMax, min: o.minMax, max: o.maxMax, orbits: [o] });
-      } else {
-        last.orbits.push(o);
-        last.min = Math.min(last.min, o.minMax);
-        last.max = Math.max(last.max, o.maxMax);
-        last.mean = last.orbits.reduce((s, x) => s + x.meanMax, 0) / last.orbits.length;
-      }
-    }
-
-    const target = L - 1;
-    const cs = clusters.map((c) => ({ ...c, orbits: [...c.orbits] }));
-    while (cs.length > target) {
-      let best = 0;
-      let bestGap = Infinity;
-      for (let i = 0; i < cs.length - 1; i++) {
-        const gap = cs[i].mean - cs[i + 1].mean;
-        if (gap < bestGap) {
-          bestGap = gap;
-          best = i;
-        }
-      }
-      const a = cs[best];
-      const b = cs[best + 1];
-      const merged = [...a.orbits, ...b.orbits];
-      cs.splice(best, 2, {
-        mean: merged.reduce((s, x) => s + x.meanMax, 0) / merged.length,
-        min: Math.min(a.min, b.min),
-        max: Math.max(a.max, b.max),
-        orbits: merged,
-      });
-    }
-    while (cs.length < target) {
-      const last = cs[cs.length - 1];
-      cs.push({ mean: last.min * 0.5, min: EQUATOR, max: last.min, orbits: [] });
-    }
-
     const thresh: number[] = [FACE_LAYER_THRESH];
-    for (let k = 0; k < target - 1; k++) {
-      thresh.push((cs[k].min + cs[k + 1].max) / 2);
+    const innerCount = L - 1;
+    for (let k = 1; k <= innerCount; k++) {
+      // Equal-width: k=1 → just below outer; k=innerCount → equator (0).
+      thresh.push(FACE_LAYER_THRESH * ((innerCount - k) / innerCount));
     }
-    // Lower bound just below deepest complete orbit — excludes equator straddlers.
-    thresh.push(Math.max(EQUATOR, cs[target - 1].min - 0.02));
     this.depthThresh = thresh;
   }
 
@@ -1139,10 +1012,10 @@ export class Megaminx extends PolyPuzzle {
     return 16 + this.order * 4;
   }
 
-  /** Megaminx notation: U / U2 / U3 for depth 0 / 1 / 2 (no tip-lowercase). */
+  /** Megaminx notation: U / 2U / 3U for depth 0 / 1 / 2 (2U = inner; U2 = 144°). */
   protected notation(m: FaceTurnMove): string {
     const d = m.depth ?? 0;
-    const face = d > 0 ? `${m.face}${d + 1}` : m.face;
+    const face = d > 0 ? `${d + 1}${m.face}` : m.face;
     const abs = Math.abs(m.steps);
     const twice = abs === 2 ? '2' : '';
     return `${face}${twice}${m.steps < 0 ? "'" : ''}`;
@@ -1153,10 +1026,8 @@ export class Megaminx extends PolyPuzzle {
     const buttons: FaceButton[] = [];
     for (let depth = 0; depth < L; depth++) {
       for (const f of this.faces) {
-        let label: string;
-        if (depth === 0) label = f.label;
-        else if (L === 2) label = `${f.label}层`;
-        else label = `${f.label}${depth + 1}`;
+        // Master Kilominx / 4×4 style: U = outer, 2U = inner (里层), 3U…
+        const label = depth === 0 ? f.label : `${depth + 1}${f.label}`;
         buttons.push({
           id: f.id,
           label,
