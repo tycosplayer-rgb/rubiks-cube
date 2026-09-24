@@ -4237,31 +4237,37 @@ void main() {
       </div>
       <div class="panel-body" id="top-bar-body">
         <div class="controls">
-          <label class="ctrl type-ctrl">魔方类型
-            <select id="puzzle-type">
-              <option value="cube">方块魔方</option>
-              <option value="pyraminx">金字塔</option>
-              <option value="megaminx">十二面体</option>
-            </select>
-          </label>
-          <label class="ctrl" id="order-ctrl">阶数
-            <select id="order">
-              ${[2,3,4,5,6,7].map(e=>`<option value="${e}" ${e===3?`selected`:``}>${e}×${e}×${e}</option>`).join(``)}
-            </select>
-          </label>
-          <label class="ctrl">速度 <input id="speed" type="range" min="0.5" max="3" step="0.25" value="1" /></label>
-          <div class="mode-toggle" role="group" aria-label="操作模式">
-            <button type="button" class="mode-btn active" data-mode="smart" title="点色块拧层，空白转视角">智能</button>
-            <button type="button" class="mode-btn" data-mode="orbit" title="只旋转视角">视角</button>
-            <button type="button" class="mode-btn" data-mode="twist" title="只拧魔方层">拧动</button>
+          <div class="control-row setup-controls">
+            <label class="ctrl type-ctrl">魔方类型
+              <select id="puzzle-type">
+                <option value="cube">方块魔方</option>
+                <option value="pyraminx">金字塔</option>
+                <option value="megaminx">十二面体</option>
+              </select>
+            </label>
+            <label class="ctrl" id="order-ctrl">阶数
+              <select id="order">
+                ${[2,3,4,5,6,7].map(e=>`<option value="${e}" ${e===3?`selected`:``}>${e}×${e}×${e}</option>`).join(``)}
+              </select>
+            </label>
+            <label class="ctrl">速度 <input id="speed" type="range" min="0.5" max="3" step="0.25" value="1" /></label>
           </div>
-          <div class="mode-toggle style-toggle" role="group" aria-label="外观样式">
-            <button type="button" class="style-btn active" data-style="sticker">贴纸</button>
-            <button type="button" class="style-btn" data-style="full">全色</button>
+          <div class="control-row mode-controls">
+            <div class="mode-toggle" role="group" aria-label="操作模式">
+              <button type="button" class="mode-btn active" data-mode="smart" title="点色块拧层，空白转视角">智能</button>
+              <button type="button" class="mode-btn" data-mode="orbit" title="只旋转视角">视角</button>
+              <button type="button" class="mode-btn" data-mode="twist" title="只拧魔方层">拧动</button>
+            </div>
+            <div class="mode-toggle style-toggle" role="group" aria-label="外观样式">
+              <button type="button" class="style-btn active" data-style="sticker">贴纸</button>
+              <button type="button" class="style-btn" data-style="full">全色</button>
+            </div>
           </div>
-          <button id="btn-scramble" class="primary" type="button">打乱</button>
-          <button id="btn-solve" class="success" type="button">自动还原</button>
-          <button id="btn-reset" class="ghost" type="button">复位</button>
+          <div class="control-row action-controls">
+            <button id="btn-scramble" class="primary" type="button">打乱</button>
+            <button id="btn-solve" class="success" type="button">自动还原</button>
+            <button id="btn-reset" class="ghost" type="button">复位</button>
+          </div>
         </div>
       </div>
     </div>
