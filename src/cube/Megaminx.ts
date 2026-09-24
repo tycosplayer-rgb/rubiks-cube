@@ -18,8 +18,6 @@ const STAR_TIP_SCALE = 1;
 /** Even-N star dent radius (fraction from face center toward vertex).
  *  Smaller → sharper ★ points (内角往中心缩). Classic pentagram ≈0.30; pointed ★ ≈0.20. */
 const STAR_DENT_SCALE = 0.20;
-/** Even-N split between inner ring band and outer edge band (0=at star, 1=at outer edge). */
-const STAR_BAND_T = 0.55;
 /** Geometry inset for grooves (keep gaps via mesh, not styleScale). */
 const STICKER_SHRINK = 0.992;
 /** Push facelets outward along normals so spinning layers clear the core. */
@@ -49,12 +47,12 @@ interface MegaTile extends PolyTile {
  * Dodecahedron Megaminx, orders 2–7.
  * N=3: classic star-cut (1 center + 5 edges + 5 corners).
  * N=2: Junior-like corners only.
- * N=4: star-cut — black five-pointed ★ void in face center (tips→edge midpoints,
- *       挨到棱 via STAR_TIP_SCALE=1; sharpened dents via STAR_DENT_SCALE≈0.20).
- *       Colored pieces in the bays; 5 corners + 10 mid-edges + 10 rings = 25/face.
- * N≥5: parallel-to-edge lattice (N stickers/edge; filled center pentagon; no ★ void).
+ * N≥4: parallel-to-edge lattice (N stickers/edge; filled center; same k/N cuts).
  *       Even: (N−2) parallels/dir. Odd: outermost (N−1)/2
- *       (N=5 Gigaminx → 2/dir → 31/face; N=7 Teraminx → 3/dir → 61/face).
+ *       (N=4 → 2/dir → 31/face; N=5 Gigaminx → 2/dir → 31/face; N=7 → 61/face).
+ * N=4 only: black ★ overlay (tips→edge midpoints, 挨到棱 STAR_TIP_SCALE=1;
+ *       dents STAR_DENT_SCALE≈0.20) covers the center visually — does NOT remesh
+ *       or relocate lattice cut positions.
  *
  * Face turns 72°. Turnable layers per face axis: L = ⌊N/2⌋ (depth 0 = outer face;
  * depth 1..L-1 = successive inner bands by axis projection). N=2/3 → outer only.
@@ -203,7 +201,7 @@ export class Megaminx extends PolyPuzzle {
       colorCss: CSS[i],
     }));
 
-    // N=4: near-black core so the ★ sticker void reads solid. N≥5: dark grooves.
+    // N≥4: near-black core (N=4 ★ overlay + grooves; N≥5 dark grooves).
     // N=2/3 keep neutral gray plastic.
     const coreColor = this.order >= 4 ? 0x0a0a0a : 0x8b929c;
     this.core = new THREE.Mesh(
@@ -326,31 +324,33 @@ export class Megaminx extends PolyPuzzle {
       return;
     }
 
-    // N=4: black ★ center void (tips 挨到棱). N≥5: parallel lattice (filled center).
-    if (N === 4) {
-      this.buildEvenStarFace(N, faceId, points, c, raw, vertId, edgeId, addPoly);
-      return;
-    }
+    // N≥4: parallel-to-edge lattice (identical cut positions for N=4 and N≥5).
     this.buildParallelFace(N, faceId, points, c, raw, vertId, edgeId, addPoly);
+    // N=4: black ★ is a visual overlay only — lattice vertices / cuts stay put.
+    if (N === 4) {
+      // Recolor the lattice center cell black so gaps under the ★ stay dark.
+      for (let i = this.megaTiles.length - 1; i >= 0; i--) {
+        const t = this.megaTiles[i];
+        if (t.faceIndex === faceIndex && t.kind === 'center') {
+          t.mesh.material.color.setHex(0x0a0a0a);
+          break;
+        }
+      }
+      this.addBlackStarOverlay(faceId, points, c, normal);
+    }
   }
 
   /**
-   * N=4 star-cut face: black five-pointed ★ void (no center sticker) + bay rings + outer.
-   * Tips aim at edge midpoints and meet the outer edge (STAR_TIP_SCALE=1 → 挨到棱).
-   * Dents pull toward center (STAR_DENT_SCALE≈0.20) for a sharpened ★.
-   * Per face: 5 corners + 10 mid-edges + 10 bay rings = 25 colored stickers.
+   * N=4 visual-only black ★ overlay. Tips → edge midpoints (STAR_TIP_SCALE=1 → 挨到棱);
+   * dents toward vertices (STAR_DENT_SCALE≈0.20). Does not alter parallel-lattice cuts —
+   * sits slightly above the face and covers the center region.
    */
-  private buildEvenStarFace(
-    N: number,
+  private addBlackStarOverlay(
     faceId: string,
     points: THREE.Vector3[],
     c: THREE.Vector3,
-    raw: THREE.Vector3[],
-    vertId: Map<THREE.Vector3, number>,
-    edgeId: (a: THREE.Vector3, b: THREE.Vector3) => string,
-    addPoly: (poly: THREE.Vector3[], pieceId: string, kind: MegaTile['kind']) => void,
+    normal: THREE.Vector3,
   ): void {
-    // Tips → edge midpoints; dents → vertices (corners nestle in notches).
     const dent = points.map((p) => c.clone().lerp(p, STAR_DENT_SCALE));
     const tip: THREE.Vector3[] = [];
     for (let i = 0; i < 5; i++) {
@@ -358,119 +358,59 @@ export class Megaminx extends PolyPuzzle {
       tip.push(c.clone().lerp(mid, STAR_TIP_SCALE));
     }
 
-    // Star void: no colored facelets inside tip/dent outline — black core shows ★.
-
-    const onEdge = (a: THREE.Vector3, b: THREE.Vector3, t: number) => a.clone().lerp(b, t);
-
+    // Lift above stickers so the ★ reads on top without remeshing cells.
+    const lift = 0.012;
+    const outline: THREE.Vector3[] = [];
     for (let i = 0; i < 5; i++) {
-      const i0 = (i + 4) % 5;
-      const i1 = (i + 1) % 5;
-      const Vi = points[i];
-      const cutNext = onEdge(Vi, points[i1], 1 / N);
-      const cutPrev = onEdge(Vi, points[i0], 1 / N);
-      addPoly(
-        [Vi, cutNext, dent[i], cutPrev],
-        `corner:${vertId.get(raw[i])}`,
-        'corner',
+      outline.push(
+        tip[i].clone().addScaledVector(normal, lift),
+        dent[(i + 1) % 5].clone().addScaledVector(normal, lift),
       );
     }
-
-    // N=4: one bay band between star and outer edge.
-    const ringBands = Math.max(1, N / 2 - 1);
-    const splits: number[] = [];
-    if (N === 4) {
-      splits.push(STAR_BAND_T);
-    } else {
-      for (let b = 1; b <= ringBands; b++) splits.push(b / (ringBands + 1));
+    const cLift = c.clone().addScaledVector(normal, lift);
+    const verts: THREE.Vector3[] = [];
+    for (let i = 0; i < outline.length; i++) {
+      verts.push(cLift, outline[i], outline[(i + 1) % outline.length]);
     }
-
-    // Drop consecutive duplicates so tip-on-edge columns become triangles
-    // (STAR_TIP_SCALE=1 → tip coincides with edge mid).
-    const addClean = (pts: THREE.Vector3[], pieceId: string, kind: MegaTile['kind']) => {
-      const clean: THREE.Vector3[] = [];
-      for (const p of pts) {
-        if (!clean.length || clean[clean.length - 1].distanceToSquared(p) > 1e-16) {
-          clean.push(p);
-        }
-      }
-      if (
-        clean.length >= 2 &&
-        clean[0].distanceToSquared(clean[clean.length - 1]) < 1e-16
-      ) {
-        clean.pop();
-      }
-      if (clean.length >= 3) addPoly(clean, pieceId, kind);
-    };
-
-    for (let i = 0; i < 5; i++) {
-      const i1 = (i + 1) % 5;
-      const Vi = points[i];
-      const Vi1 = points[i1];
-      const L = dent[i];
-      const T = tip[i];
-      const R = dent[i1];
-
-      const E: THREE.Vector3[] = [];
-      for (let k = 1; k <= N - 1; k++) E.push(onEdge(Vi, Vi1, k / N));
-
-      const onStar = (tEdge: number): THREE.Vector3 => {
-        if (tEdge <= 0.5) {
-          const u = (tEdge - 1 / N) / (0.5 - 1 / N);
-          return L.clone().lerp(T, Math.min(1, Math.max(0, u)));
-        }
-        const u = (tEdge - 0.5) / ((N - 1) / N - 0.5);
-        return T.clone().lerp(R, Math.min(1, Math.max(0, u)));
-      };
-
-      const levels: THREE.Vector3[][] = [];
-      const starPts = E.map((_, ki) => onStar((ki + 1) / N));
-      levels.push(starPts);
-      for (const s of splits) {
-        levels.push(E.map((e, ki) => starPts[ki].clone().lerp(e, s)));
-      }
-      levels.push(E);
-
-      for (let b = 0; b < ringBands; b++) {
-        const inner = levels[b];
-        const outer = levels[b + 1];
-        for (let s = 0; s < N - 2; s++) {
-          addClean(
-            [inner[s], inner[s + 1], outer[s + 1], outer[s]],
-            `ring:${faceId}:b${b}:s${s}:e${i}`,
-            'ring',
-          );
-        }
-      }
-
-      const innerE = levels[ringBands];
-      const ia = vertId.get(raw[i])!;
-      const ib = vertId.get(raw[i1])!;
-      const eKey = edgeId(raw[i], raw[i1]);
-      for (let s = 0; s < N - 2; s++) {
-        const slot = ia < ib ? s : N - 3 - s;
-        addClean(
-          [innerE[s], innerE[s + 1], E[s + 1], E[s]],
-          `edge:${eKey}:${slot}`,
-          'edge',
-        );
-      }
-    }
+    const geo = new THREE.BufferGeometry().setFromPoints(verts);
+    geo.computeVertexNormals();
+    const mesh = new THREE.Mesh(
+      geo,
+      new THREE.MeshStandardMaterial({
+        color: 0x0a0a0a,
+        roughness: 0.85,
+        metalness: 0.0,
+        flatShading: true,
+        polygonOffset: true,
+        polygonOffsetFactor: -8,
+        polygonOffsetUnits: -8,
+      }),
+    );
+    mesh.renderOrder = 2;
+    mesh.userData.starOverlay = true;
+    mesh.userData.faceId = faceId;
+    mesh.userData.starTips = tip.map((p) => p.toArray());
+    mesh.userData.starDents = dent.map((p) => p.toArray());
+    this.group.add(mesh);
+    // Rotate with core on face turns (dodecahedral 72° symmetry keeps ★s aligned).
+    this.corePieces.push({ mesh, initialMatrix: new THREE.Matrix4() });
   }
 
   /**
-   * Parallel-to-edge lattice face geometry (N≥5; also unused N≥4 even except N=4 star).
+   * Parallel-to-edge lattice face geometry (N≥4).
    *
    * On each outer edge mark equal points at t=k/N (k=1..N-1). For each of the
    * 5 edge directions, take distinct interior offsets of those lattice points
    * projected onto that edge's outward normal, then keep:
-   *   • even N: all (N−2) offsets (N=4 → 2/dir; N=6 → 4/dir)
+   *   • even N: all (N−2) offsets (N=4 → 2/dir → 31/face; N=6 → 4/dir → 116)
    *   • odd  N: outermost (N−1)/2 (N=5 → 2/dir → 31/face Gigaminx;
    *             N=7 → 3/dir → 61/face Teraminx)
    * Full odd offsets over-subdivide (N=5 ALL → 66 cells); the cap matches
    * physical Gigaminx sticker count while keeping N stickers along each edge
    * (cross-direction lines still hit edge k/N points).
    *
-   * Arrangement cells fill the face (center included; no oversized ★ void).
+   * Arrangement cells fill the face (center included). N=4 adds a separate
+   * black ★ overlay on top — lattice cut positions are unchanged.
    * Outer band: 5 corners + (N−2) mid-edge stickers/side (exactly N along edge).
    * Interior cells are face-local rings; grooves may show the core.
    */
@@ -1112,19 +1052,25 @@ export class Megaminx extends PolyPuzzle {
     );
   }
 
+
+  /** N=4 black ★ overlay meshes (visual only; not stickers). */
+  debugStarOverlays(): THREE.Mesh[] {
+    const out: THREE.Mesh[] = [];
+    this.group.traverse((obj) => {
+      if ((obj as THREE.Mesh).isMesh && obj.userData?.starOverlay) {
+        out.push(obj as THREE.Mesh);
+      }
+    });
+    return out;
+  }
+
   /** Expected on-face sticker count for this order (solved). */
   expectedPerFace(): number {
     const N = this.order;
     if (N === 2) return 5;
     if (N === 3) return 11;
-    // N=4 star-cut: no center sticker; 5 corners + 10 mid-edges + 10 rings = 25.
-    if (N === 4) {
-      const midEdges = 5 * (N - 2);
-      const ringBands = Math.max(1, N / 2 - 1);
-      const rings = ringBands * 5 * (N - 2);
-      return 5 + midEdges + rings;
-    }
-    // Parallel-lattice (N≥5): N=5 → 31; N=6 → 116; N=7 → 61.
+    // Parallel-lattice: N=4 → 31; N=5 → 31; N=6 → 116; N=7 → 61.
+    if (N === 4) return 31;
     if (N === 5) return 31;
     if (N === 6) return 116;
     if (N === 7) return 61;
@@ -1228,15 +1174,15 @@ export class Megaminx extends PolyPuzzle {
     } else if (this.order === 2) {
       pieceGraphOk = pieceGraphOk && kinds.corner === 60 && kinds.center === 0 && kinds.edge === 0;
     } else if (this.order === 4) {
-      // Star void (no center): 5 corners + 10 edges + 10 bay rings / face → 25
-      // Totals: corner 60, edge 120, ring 120; graph edge×2, corner×3, ring×1
+      // Parallel lattice + ★ overlay: 5 corners + 10 edges + 1 center + 15 rings / face → 31
+      // Totals: center 12, corner 60, edge 120, ring 180
       pieceGraphOk =
         pieceGraphOk &&
-        kinds.center === 0 &&
+        kinds.center === 12 &&
         kinds.corner === 60 &&
         kinds.edge === 120 &&
-        kinds.ring === 120 &&
-        this.expectedPerFace() === 25;
+        kinds.ring === 180 &&
+        this.expectedPerFace() === 31;
     } else if (this.order === 5) {
       // Parallel lattice (2 lines/dir): 5 corners + 15 edges + 1 center + 10 rings / face → 31
       // Totals: center 12, corner 60, edge 180, ring 120
