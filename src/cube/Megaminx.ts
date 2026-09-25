@@ -50,11 +50,11 @@ interface MegaTile extends PolyTile {
  * N≥4: parallel-to-edge lattice (N stickers/edge; same k/N cuts).
  *       Even: (N−2) parallels/dir. Odd: outermost (N−1)/2
  *       (N=4 → 2/dir; N=5 Gigaminx → 2/dir → 31/face; N=7 → 61/face).
- * N=4 only: ★-shaped center void (挖空) — no center sticker/piece; drop lattice
- *       cells whose centroid lies inside the star (tips→edge midpoints
- *       STAR_TIP_SCALE=1; dents STAR_DENT_SCALE≈0.20). Outer corners/mid-edges
- *       keep original parallel-lattice geometry (切块位置不变). Near-black core
- *       shows through. N≥5: filled center (unchanged).
+ * Even N≥4 (N=4,6,…): ★-shaped center void (挖空) — no center sticker/piece;
+ *       drop lattice cells whose centroid lies inside the star (tips→edge
+ *       midpoints STAR_TIP_SCALE=1; dents STAR_DENT_SCALE≈0.20). Outer
+ *       corners/mid-edges keep original parallel-lattice geometry (切块位置不变).
+ *       Near-black core shows through. Odd N≥5 (Gigaminx/Teraminx): filled center.
  *
  * Face turns 72°. Turnable layers per face axis: L = ⌊N/2⌋ (depth 0 = outer face;
  * depth 1..L-1 = successive thin lattice-step rings — not equal half-puzzle slabs).
@@ -64,7 +64,7 @@ export class Megaminx extends PolyPuzzle {
   readonly puzzleType = 'megaminx' as const;
   private readonly order: number;
   private readonly megaTiles: MegaTile[] = [];
-  /** N=4 ★ void tip/dent geometry per face (no overlay mesh). */
+  /** Even-N≥4 ★ void tip/dent geometry per face (no overlay mesh). */
   private readonly starVoids: { faceId: string; tips: number[][]; dents: number[][] }[] = [];
   private readonly scratch = new THREE.Vector3();
   /**
@@ -243,7 +243,7 @@ export class Megaminx extends PolyPuzzle {
       colorCss: CSS[i],
     }));
 
-    // N≥4: near-black core (N=4 ★ void + grooves; N≥5 dark grooves).
+    // N≥4: near-black core (even-N ★ void + grooves; odd-N dark grooves).
     // N=2/3 keep neutral gray plastic.
     const coreColor = this.order >= 4 ? 0x0a0a0a : 0x8b929c;
     this.core = new THREE.Mesh(
@@ -366,8 +366,8 @@ export class Megaminx extends PolyPuzzle {
       return;
     }
 
-    // N≥4: parallel-to-edge lattice (identical cut positions for N=4 and N≥5).
-    // N=4: ★ void is cut by omitting in-star cells — lattice vertices stay put.
+    // N≥4: parallel-to-edge lattice (identical cut positions for even/odd).
+    // Even N≥4: ★ void by omitting in-star cells — lattice vertices stay put.
     this.buildParallelFace(N, faceId, points, c, raw, vertId, edgeId, addPoly);
   }
 
@@ -377,17 +377,17 @@ export class Megaminx extends PolyPuzzle {
    * On each outer edge mark equal points at t=k/N (k=1..N-1). For each of the
    * 5 edge directions, take distinct interior offsets of those lattice points
    * projected onto that edge's outward normal, then keep:
-   *   • even N: all (N−2) offsets (N=4 → 2/dir; N=6 → 4/dir → 116)
+   *   • even N: all (N−2) offsets (N=4 → 2/dir; N=6 → 4/dir)
    *   • odd  N: outermost (N−1)/2 (N=5 → 2/dir → 31/face Gigaminx;
    *             N=7 → 3/dir → 61/face Teraminx)
    * Full odd offsets over-subdivide (N=5 ALL → 66 cells); the cap matches
    * physical Gigaminx sticker count while keeping N stickers along each edge
    * (cross-direction lines still hit edge k/N points).
    *
-   * Arrangement cells fill the face. N=4 then hollows a ★ void: no center
+   * Arrangement cells fill the face. Even N≥4 then hollows a ★ void: no center
    * sticker; drop cells whose centroid lies inside the star polygon (tips at
    * edge midpoints, dents STAR_DENT_SCALE). Outer corners/mid-edges keep
-   * original lattice geometry. N≥5: filled center unchanged.
+   * original lattice geometry. Odd N≥5: filled center unchanged.
    * Outer band: 5 corners + (N−2) mid-edge stickers/side (exactly N along edge).
    * Interior cells are face-local rings; grooves / ★ void show the core.
    */
@@ -714,10 +714,10 @@ export class Megaminx extends PolyPuzzle {
       });
     });
 
-    // N=4: ★-shaped center void (挖空). Same parallel lattice cuts; omit center
-    // sticker entirely and drop any cell whose centroid lies inside the star.
-    // Outer corners / mid-edges keep original k/N geometry. No overlay mesh.
-    if (N === 4) {
+    // Even N≥4: ★-shaped center void (挖空). Same parallel lattice cuts; omit
+    // center sticker entirely and drop any cell whose centroid lies inside the
+    // star. Outer corners / mid-edges keep original k/N geometry. No overlay.
+    if (N % 2 === 0 && N >= 4) {
       const tip2: V2[] = [];
       const dent2: V2[] = [];
       for (let i = 0; i < 5; i++) {
@@ -745,7 +745,7 @@ export class Megaminx extends PolyPuzzle {
         return inside;
       };
       const kept = classified.filter((cell) => {
-        if (cell.kind === 'center') return false; // 4阶没有中心块
+        if (cell.kind === 'center') return false; // even-N: no center piece
         if (cell.kind === 'corner' || cell.kind === 'edge') return true;
         return !pointInStar(cell.cen);
       });
@@ -1085,7 +1085,7 @@ export class Megaminx extends PolyPuzzle {
     return out;
   }
 
-  /** N=4 ★ void tip/dent positions (face-local world at build; no overlay mesh). */
+  /** Even-N≥4 ★ void tip/dent positions (face-local world at build; no overlay). */
   debugStarVoids(): { faceId: string; tips: number[][]; dents: number[][] }[] {
     return this.starVoids.map((s) => ({
       faceId: s.faceId,
@@ -1099,11 +1099,11 @@ export class Megaminx extends PolyPuzzle {
     const N = this.order;
     if (N === 2) return 5;
     if (N === 3) return 11;
-    // N=4: parallel lattice hollowed by ★ void → 20 (no center; 10 in-star rings dropped).
-    // N=5 → 31; N=6 → 116; N=7 → 61.
+    // Even N≥4: parallel lattice hollowed by ★ void (no center; in-star rings dropped).
+    // N=4 → 20; N=5 → 31; N=6 → 85; N=7 → 61.
     if (N === 4) return 20;
     if (N === 5) return 31;
-    if (N === 6) return 116;
+    if (N === 6) return 85;
     if (N === 7) return 61;
     if (N % 2 === 0) {
       return 5 + 5 * (N - 2) + 1 + 5 * (N - 2) * (N / 2 - 1);
@@ -1225,14 +1225,15 @@ export class Megaminx extends PolyPuzzle {
         kinds.ring === 120 &&
         this.expectedPerFace() === 31;
     } else if (this.order === 6) {
-      // Parallel lattice: 5 corners + 20 edges + 1 center + 90 rings / face → 116
+      // Parallel lattice + ★ void: 5 corners + 20 edges + 0 center + 60 rings / face → 85
+      // Totals: center 0, corner 60, edge 240, ring 720
       pieceGraphOk =
         pieceGraphOk &&
-        kinds.center === 12 &&
+        kinds.center === 0 &&
         kinds.corner === 60 &&
         kinds.edge === 240 &&
-        kinds.ring === 1080 &&
-        this.expectedPerFace() === 116;
+        kinds.ring === 720 &&
+        this.expectedPerFace() === 85;
     } else if (this.order === 7) {
       // Parallel lattice (3 lines/dir): 5 corners + 25 edges + 1 center + 30 rings / face → 61
       pieceGraphOk =

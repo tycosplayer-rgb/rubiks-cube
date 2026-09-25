@@ -1,5 +1,5 @@
 /**
- * Headless Megaminx checks (N≥4 parallel lattice; N=4 ★ void / no center; no WebGL).
+ * Headless Megaminx checks (N≥4 parallel lattice; even-N≥4 ★ void / no center; no WebGL).
  * Run: npm run verify:megaminx
  */
 import { Megaminx } from '../src/cube/Megaminx.ts';
@@ -562,7 +562,7 @@ function smokeMegaOrder(N) {
 }
 
 
-// --- Parallel lattice (N≥4): N stickers/edge; N=4 ★ void (no center); N≥5 filled center ---
+// --- Parallel lattice (N≥4): N stickers/edge; even-N ★ void (no center); odd-N filled center ---
 function assertParallelCuts(N) {
   const q = new Megaminx(N, 'sticker');
   q.group.updateMatrixWorld(true);
@@ -581,8 +581,8 @@ function assertParallelCuts(N) {
     const corners = onFace.filter((t) => t.kind === 'corner');
     const edges = onFace.filter((t) => t.kind === 'edge');
     const rings = onFace.filter((t) => t.kind === 'ring');
-    // N=4: ★ void → no center sticker. N≥5: filled center.
-    const expectCenters = N === 4 ? 0 : 1;
+    // Even N≥4: ★ void → no center sticker. Odd N≥5: filled center.
+    const expectCenters = N % 2 === 0 ? 0 : 1;
     if (centers.length !== expectCenters) {
       console.error('parallelCut', N, face.id, 'bad center count', {
         centers: centers.length,
@@ -682,7 +682,7 @@ function assertParallelCuts(N) {
       }
     }
 
-    if (N === 4) {
+    if (N % 2 === 0) {
       // ★ void: no sticker near face center; no overlay mesh.
       if (q.debugStarOverlays().length !== 0) {
         console.error('parallelCut', N, face.id, 'unexpected ★ overlay mesh');
@@ -714,8 +714,8 @@ function assertParallelCuts(N) {
   console.log('parallelCut', N, { facesOk, expected, ok });
   return ok;
 }
-// --- N=4 ★ void: tips → edge midpoints AND tips reach outer edges (挨到棱);
-// no overlay mesh; no center sticker. Lattice outer cuts checked by parallelCut(4).
+// --- Even-N≥4 ★ void: tips → edge midpoints AND tips reach outer edges (挨到棱);
+// no overlay mesh; no center sticker. Lattice outer cuts checked by parallelCut.
 function assertEvenStarOrientation(N) {
   const q = new Megaminx(N, 'sticker');
   q.group.updateMatrixWorld(true);
@@ -736,7 +736,7 @@ function assertEvenStarOrientation(N) {
     const onFace = q.stickersOnFace(face.id);
     const centers = onFace.filter((t) => t.kind === 'center');
     if (centers.length !== 0) {
-      console.error('starOrient', N, face.id, 'N=4 must have no center sticker', centers.length);
+      console.error('starOrient', N, face.id, 'even-N must have no center sticker', centers.length);
       return false;
     }
     if (onFace.length !== q.expectedPerFace()) {
@@ -900,6 +900,7 @@ function assertEvenStarOrientation(N) {
 }
 
 const starOrient4 = assertEvenStarOrientation(4);
+const starOrient6 = assertEvenStarOrientation(6);
 const parallelCut4 = assertParallelCuts(4);
 const parallelCut5 = assertParallelCuts(5);
 const parallelCut6 = assertParallelCuts(6);
@@ -1110,6 +1111,23 @@ function assertMultiDepth(N) {
         return false;
       }
     }
+    // N=6 ★ void: U/2U/3U thin bands; outer ≈115 tiles / 85 pieces
+    if (N === 6) {
+      if (rTiles.length !== 115 || rPieces !== 85) {
+        console.error('multiDepth', N, 'R counts', rTiles.length, rPieces);
+        return false;
+      }
+      if (r2Tiles.length !== 60 || r2Pieces !== 55) {
+        console.error('multiDepth', N, '2R thin ring counts', r2Tiles.length, r2Pieces);
+        return false;
+      }
+      const r3Tiles = q['selectLayer']({ kind: 'face', face: 'R', steps: 1, depth: 2 });
+      const r3Pieces = new Set(r3Tiles.map((t) => t.pieceId)).size;
+      if (r3Tiles.length !== 90 || r3Pieces !== 80) {
+        console.error('multiDepth', N, '3R thin ring counts', r3Tiles.length, r3Pieces);
+        return false;
+      }
+    }
   }
   console.log('multiDepth', N, {
     L,
@@ -1161,6 +1179,7 @@ const pass =
   smokeMega6 &&
   smokeMega7 &&
   starOrient4 &&
+  starOrient6 &&
   parallelCut4 &&
   parallelCut5 &&
   parallelCut6 &&
@@ -1185,6 +1204,7 @@ console.log({
   staleTrapOk,
   dragScoringOk,
   starOrient4,
+  starOrient6,
   parallelCut4,
   parallelCut5,
   parallelCut6,
