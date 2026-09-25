@@ -1111,19 +1111,19 @@ function assertMultiDepth(N) {
         return false;
       }
     }
-    // N=6 ★ void: U/2U/3U thin bands; outer ≈115 tiles / 85 pieces
+    // N=6 ★ void (3 lines/dir to bisector): U/2U/3U thin bands; outer 75 tiles / 45 pieces
     if (N === 6) {
-      if (rTiles.length !== 115 || rPieces !== 85) {
+      if (rTiles.length !== 75 || rPieces !== 45) {
         console.error('multiDepth', N, 'R counts', rTiles.length, rPieces);
         return false;
       }
-      if (r2Tiles.length !== 60 || r2Pieces !== 55) {
+      if (r2Tiles.length !== 30 || r2Pieces !== 25) {
         console.error('multiDepth', N, '2R thin ring counts', r2Tiles.length, r2Pieces);
         return false;
       }
       const r3Tiles = q['selectLayer']({ kind: 'face', face: 'R', steps: 1, depth: 2 });
       const r3Pieces = new Set(r3Tiles.map((t) => t.pieceId)).size;
-      if (r3Tiles.length !== 90 || r3Pieces !== 80) {
+      if (r3Tiles.length !== 30 || r3Pieces !== 25) {
         console.error('multiDepth', N, '3R thin ring counts', r3Tiles.length, r3Pieces);
         return false;
       }

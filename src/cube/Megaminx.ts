@@ -48,8 +48,8 @@ interface MegaTile extends PolyTile {
  * N=3: classic star-cut (1 center + 5 edges + 5 corners).
  * N=2: Junior-like corners only.
  * N≥4: parallel-to-edge lattice (N stickers/edge; same k/N cuts).
- *       Even: (N−2) parallels/dir. Odd: outermost (N−1)/2
- *       (N=4 → 2/dir; N=5 Gigaminx → 2/dir → 31/face; N=7 → 61/face).
+ *       Even: N/2 parallels/dir (k=1..N/2, stop at bisector). Odd: outermost (N−1)/2
+ *       (N=4 → 2/dir; N=6 → 3/dir; N=5 Gigaminx → 2/dir → 31/face; N=7 → 61/face).
  * Even N≥4 (N=4,6,…): ★-shaped center void (挖空) — no center sticker/piece;
  *       drop lattice cells whose centroid lies inside the star (tips→edge
  *       midpoints STAR_TIP_SCALE=1; dents STAR_DENT_SCALE≈0.20). Outer
@@ -377,7 +377,8 @@ export class Megaminx extends PolyPuzzle {
    * On each outer edge mark equal points at t=k/N (k=1..N-1). For each of the
    * 5 edge directions, take distinct interior offsets of those lattice points
    * projected onto that edge's outward normal, then keep:
-   *   • even N: all (N−2) offsets (N=4 → 2/dir; N=6 → 4/dir)
+   *   • even N: outermost N/2 offsets at k/N for k=1..N/2 (includes midline;
+   *             N=4 → 2/dir; N=6 → 3/dir — do not draw past-bisector k>N/2)
    *   • odd  N: outermost (N−1)/2 (N=5 → 2/dir → 31/face Gigaminx;
    *             N=7 → 3/dir → 61/face Teraminx)
    * Full odd offsets over-subdivide (N=5 ALL → 66 cells); the cap matches
@@ -459,37 +460,26 @@ export class Megaminx extends PolyPuzzle {
     }
 
     // Cut lines: for each edge direction, distinct interior positive offsets
-    // of lattice points on other edges → (N−2) parallels per direction.
+    // of lattice points on other edges. Even: N/2 (to bisector); odd: (N−1)/2.
+    // Cluster near-equal projections — dodeca FP noise can split one geometric
+    // offset into two toFixed(10) buckets; without merge, keep=N/2 would grab
+    // a twin pair and drop the real midline (N=4 → broken star/cuts).
     type Line2 = { ox: number; oy: number; dist: number; ei: number };
     const lines: Line2[] = [];
     for (let ei = 0; ei < 5; ei++) {
       const e = edges2[ei];
-      // Collect interior offsets. Odd N: cluster near-equal projections —
-      // dodeca FP noise can split one offset into two toFixed(10) buckets,
-      // which made keep=(N-1)/2 pick the same line twice (N=5 → 14 cells).
-      // Even N: keep prior toFixed(10) Set (N=4/6 band orbits already tuned).
-      let sorted: number[];
-      if (N % 2 === 1) {
-        const dists: number[] = [];
-        const mergeEps = Math.max(1e-6, e.A * 1e-5);
-        for (const p of lattice) {
-          if (p.ei === ei) continue;
-          const d = p.x * e.ox + p.y * e.oy;
-          if (d <= 1e-8 || d >= e.A - 1e-8) continue;
-          if (!dists.some((x) => Math.abs(x - d) < mergeEps)) dists.push(d);
-        }
-        sorted = dists.sort((a, b) => b - a);
-      } else {
-        const dists = new Set<number>();
-        for (const p of lattice) {
-          if (p.ei === ei) continue;
-          const d = p.x * e.ox + p.y * e.oy;
-          if (d > 1e-8 && d < e.A - 1e-8) dists.add(+d.toFixed(10));
-        }
-        sorted = [...dists].sort((a, b) => b - a);
+      const dists: number[] = [];
+      const mergeEps = Math.max(1e-6, e.A * 1e-5);
+      for (const p of lattice) {
+        if (p.ei === ei) continue;
+        const d = p.x * e.ox + p.y * e.oy;
+        if (d <= 1e-8 || d >= e.A - 1e-8) continue;
+        if (!dists.some((x) => Math.abs(x - d) < mergeEps)) dists.push(d);
       }
-      // Even: all offsets (=N−2). Odd: outermost (N−1)/2 (Gigaminx/Teraminx).
-      const keep = N % 2 === 0 ? sorted.length : (N - 1) / 2;
+      const sorted = dists.sort((a, b) => b - a);
+      // Even: outermost N/2 (k=1..N/2 incl. midline; drop past-bisector).
+      // Odd: outermost (N−1)/2 (Gigaminx/Teraminx).
+      const keep = N % 2 === 0 ? N / 2 : (N - 1) / 2;
       for (const d of sorted.slice(0, keep)) lines.push({ ox: e.ox, oy: e.oy, dist: d, ei });
     }
 
@@ -1100,10 +1090,10 @@ export class Megaminx extends PolyPuzzle {
     if (N === 2) return 5;
     if (N === 3) return 11;
     // Even N≥4: parallel lattice hollowed by ★ void (no center; in-star rings dropped).
-    // N=4 → 20; N=5 → 31; N=6 → 85; N=7 → 61.
+    // N=4 → 20; N=5 → 31; N=6 → 45 (3 lines/dir to bisector); N=7 → 61.
     if (N === 4) return 20;
     if (N === 5) return 31;
-    if (N === 6) return 85;
+    if (N === 6) return 45;
     if (N === 7) return 61;
     if (N % 2 === 0) {
       return 5 + 5 * (N - 2) + 1 + 5 * (N - 2) * (N / 2 - 1);
@@ -1225,15 +1215,15 @@ export class Megaminx extends PolyPuzzle {
         kinds.ring === 120 &&
         this.expectedPerFace() === 31;
     } else if (this.order === 6) {
-      // Parallel lattice + ★ void: 5 corners + 20 edges + 0 center + 60 rings / face → 85
-      // Totals: center 0, corner 60, edge 240, ring 720
+      // Parallel lattice + ★ void (3 lines/dir to bisector): 5 corners + 20 edges + 0 center + 20 rings / face → 45
+      // Totals: center 0, corner 60, edge 240, ring 240
       pieceGraphOk =
         pieceGraphOk &&
         kinds.center === 0 &&
         kinds.corner === 60 &&
         kinds.edge === 240 &&
-        kinds.ring === 720 &&
-        this.expectedPerFace() === 85;
+        kinds.ring === 240 &&
+        this.expectedPerFace() === 45;
     } else if (this.order === 7) {
       // Parallel lattice (3 lines/dir): 5 corners + 25 edges + 1 center + 30 rings / face → 61
       pieceGraphOk =
