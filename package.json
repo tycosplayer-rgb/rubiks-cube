@@ -10,7 +10,8 @@
     "verify:pyraminx": "npx tsx scripts/verify-pyraminx.mjs",
     "verify:megaminx": "npx tsx scripts/verify-megaminx.mjs",
     "verify:cube-even": "npx tsx scripts/verify-cube-even.mjs",
-    "verify:cubejs-2x2": "npx tsx scripts/verify-cubejs-2x2.mjs"
+    "verify:cubejs-2x2": "npx tsx scripts/verify-cubejs-2x2.mjs",
+    "verify:nxn-solve": "npx tsx scripts/verify-nxn-solve.mjs"
   },
   "devDependencies": {
     "@types/three": "^0.186.0",

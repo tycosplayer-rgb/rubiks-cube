@@ -1,4 +1,5 @@
 import type { Axis, LayerMove } from './types';
+import { parseNxNAlgorithm } from './nxn/moves';
 
 /**
  * Convert a layer move to readable notation.
@@ -74,8 +75,9 @@ export function faceMoveToLayer(face: string, clockwise: 1 | 2 | 3, order: numbe
   return { axis: m.axis, layer: m.layer, turns };
 }
 
-/** Parse cubejs / WCA-style algorithm for 3×3 outer moves */
+/** Parse cubejs / WCA-style algorithm. For N≥4 also accepts 2R / Rw / r. */
 export function parseAlgorithm(algo: string, order: number): LayerMove[] {
+  if (order >= 4) return parseNxNAlgorithm(algo, order);
   const tokens = algo.trim().split(/\s+/).filter(Boolean);
   const moves: LayerMove[] = [];
   for (const tok of tokens) {

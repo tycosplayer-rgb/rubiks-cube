@@ -6,6 +6,7 @@ import { isFaceTurnMove } from './puzzle';
 import { moveToNotation } from './notation';
 import { generateScramble } from './scramble';
 import { CubejsTracker, reverseHistory, ensureSolver } from './solver';
+import { solveNxN, snapshotCube } from './nxn/solveNxN';
 
 const CUBIE_SIZE = 1;
 const GAP = 0.06;
@@ -607,6 +608,40 @@ export class RubiksCube implements Puzzle {
         if (moves.length === 0 && this.history.length > 0 && !this.isSolved()) {
           moves = reverseHistory(this.history);
           method = '逆序还原打乱路径';
+        }
+      } else if (this.order === 4 || this.order === 5) {
+        const label = this.order === 4 ? '还原法（四阶）' : '还原法（五阶）';
+        this.emit({ type: 'status', message: `${label} · 分析状态…` });
+        const facelet = snapshotCube(
+          this.order,
+          this.cubies.map((c) => ({ mesh: c.mesh, ix: c.ix, iy: c.iy, iz: c.iz })),
+        );
+        const result = await solveNxN(facelet, {
+          deadlineMs: 90_000,
+          shouldAbort: () => this.abortSolve,
+          onProgress: (msg) => this.emit({ type: 'status', message: msg }),
+        });
+        if (this.abortSolve) return;
+        if (result.moves.length > 0 && !result.error) {
+          moves = result.moves;
+          method = result.method;
+        } else if (this.history.length > 0) {
+          moves = reverseHistory(this.history);
+          method = '逆序还原打乱路径';
+          this.emit({
+            type: 'status',
+            message: result.error
+              ? `${label}失败（${result.error}），改用逆序还原…`
+              : `${label}失败，改用逆序还原…`,
+          });
+        } else {
+          this.emit({
+            type: 'status',
+            message: result.error
+              ? `${label}失败：${result.error}`
+              : `${label}失败（无历史可回退）`,
+          });
+          return;
         }
       } else {
         moves = reverseHistory(this.history);
