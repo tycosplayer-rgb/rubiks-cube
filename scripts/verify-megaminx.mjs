@@ -1094,9 +1094,9 @@ function assertMultiDepth(N) {
       '2R': { tiles: r2Tiles.length, pieces: r2Pieces },
       thresh: thresh.map((t) => +t.toFixed(4)),
     });
-    // N=4: outer includes tip-touch rings (45/25); thin 2R unchanged 20/15
+    // N=4: thin 2R ring ≈ 20 tiles / 15 pieces (not ~100 tiles)
     if (N === 4) {
-      if (rTiles.length !== 45 || rPieces !== 25) {
+      if (rTiles.length !== 40 || rPieces !== 20) {
         console.error('multiDepth', N, 'R counts', rTiles.length, rPieces);
         return false;
       }
@@ -1111,9 +1111,9 @@ function assertMultiDepth(N) {
         return false;
       }
     }
-    // N=6 ★ void (3 lines/dir; tip-touch rings kept): outer 80/50; 2R/3R thin 30/25
+    // N=6 ★ void (3 lines/dir to bisector): outer 75/45; 2R/3R thin 30/25 on EVERY face
     if (N === 6) {
-      if (rTiles.length !== 80 || rPieces !== 50) {
+      if (rTiles.length !== 75 || rPieces !== 45) {
         console.error('multiDepth', N, 'R counts', rTiles.length, rPieces);
         return false;
       }
@@ -1127,6 +1127,35 @@ function assertMultiDepth(N) {
         console.error('multiDepth', N, '3R thin ring counts', r3Tiles.length, r3Pieces);
         return false;
       }
+      // Cross-face consistency: analytic Δu bug made FR/D 3X grab extra edges.
+      for (const face of q['faces']) {
+        for (const d of [1, 2]) {
+          const sel = q['selectLayer']({ kind: 'face', face: face.id, steps: 1, depth: d });
+          const pcs = new Set(sel.map((t) => t.pieceId)).size;
+          if (sel.length !== 30 || pcs !== 25) {
+            console.error('multiDepth', N, face.id, `depth ${d} counts`, sel.length, pcs);
+            return false;
+          }
+        }
+      }
+      // After many mixed-depth turns, every face must keep expected sticker count
+      // (the black-edge symptom was face counts drifting 45→44/46/48).
+      q.reset();
+      const faces = q['faces'].map((f) => f.id);
+      for (let i = 0; i < 36; i++) {
+        apply(faces[i % 12], i % 2 === 0 ? 1 : -1, i % 3);
+      }
+      const drifted = q['faces'].filter((f) => q.stickersOnFace(f.id).length !== expected);
+      if (drifted.length) {
+        console.error(
+          'multiDepth',
+          N,
+          'face count drift after mixed turns',
+          drifted.map((f) => [f.id, q.stickersOnFace(f.id).length]),
+        );
+        return false;
+      }
+      q.reset();
     }
   }
   console.log('multiDepth', N, {
