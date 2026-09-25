@@ -1178,6 +1178,79 @@ const smokeMega5 = smokeMegaOrder(5);
 const smokeMega6 = smokeMegaOrder(6);
 const smokeMega7 = smokeMegaOrder(7);
 
+/** Light high-N smoke: construct + a few turns; no golden sticker totals. */
+function smokeMegaHigh(N) {
+  const q = new Megaminx(N, 'sticker');
+  if (q.getOrder() !== N) {
+    console.error('smokeMegaHigh', N, 'order clamped to', q.getOrder());
+    return false;
+  }
+  const vv = q.debugVerifyLayers();
+  const L = Math.max(1, Math.floor(N / 2));
+  if (vv.depths !== L || vv.perFace <= 0 || !vv.pieceGraphOk) {
+    console.error('smokeMegaHigh', N, 'bad verify', { depths: vv.depths, L, perFace: vv.perFace, pieceGraphOk: vv.pieceGraphOk });
+    return false;
+  }
+  const getCenters = () => {
+    q.group.updateMatrixWorld(true);
+    return q['tiles'].map((t) => {
+      const c = new THREE.Vector3();
+      const attr = t.mesh.geometry.getAttribute('position');
+      for (let i = 0; i < attr.count; i++) c.add(new THREE.Vector3().fromBufferAttribute(attr, i));
+      return c.multiplyScalar(1 / attr.count).applyMatrix4(t.mesh.matrixWorld);
+    });
+  };
+  const reparent = (obj, newParent) => {
+    obj.updateWorldMatrix(true, false);
+    newParent.updateWorldMatrix(true, false);
+    const world = obj.matrixWorld.clone();
+    if (obj.parent !== newParent) newParent.add(obj);
+    const local = new THREE.Matrix4().copy(newParent.matrixWorld).invert().multiply(world);
+    const pos = new THREE.Vector3(), quat = new THREE.Quaternion(), scl = new THREE.Vector3();
+    local.decompose(pos, quat, scl);
+    obj.position.copy(pos);
+    obj.quaternion.copy(quat);
+    obj.scale.setScalar(1);
+    obj.updateMatrix();
+  };
+  const apply = (face, steps, depth = 0) => {
+    const move = { kind: 'face', face, steps, ...(depth ? { depth } : {}) };
+    const selected = q['selectLayer'](move);
+    const axis = q['faceOf'](face).axis;
+    const angle = q['turnAngle'](move);
+    const pivot = q['pivot'];
+    pivot.rotation.set(0, 0, 0);
+    for (const tile of selected) reparent(tile.mesh, pivot);
+    pivot.setRotationFromAxisAngle(axis, angle);
+    q.group.updateMatrixWorld(true);
+    for (const tile of selected) reparent(tile.mesh, q.group);
+    pivot.rotation.set(0, 0, 0);
+    return selected.length;
+  };
+  const b = getCenters();
+  const n0 = apply('U', 1, 0);
+  apply('U', -1, 0);
+  let rt = 0;
+  const a = getCenters();
+  for (let i = 0; i < b.length; i++) rt = Math.max(rt, b[i].distanceTo(a[i]));
+  let innerOk = true;
+  if (L > 1) {
+    const b1 = getCenters();
+    apply('U', 1, 1);
+    apply('U', -1, 1);
+    const a1 = getCenters();
+    let rt1 = 0;
+    for (let i = 0; i < b1.length; i++) rt1 = Math.max(rt1, b1[i].distanceTo(a1[i]));
+    if (rt1 >= 0.08) innerOk = false;
+  }
+  const ok = n0 > 0 && rt < 0.08 && innerOk && vv.bandsDisjoint;
+  console.log('smokeMegaHigh', N, { perFace: vv.perFace, depths: vv.depths, n0, rt, innerOk, ok });
+  return ok;
+}
+const smokeMega8 = smokeMegaHigh(8);
+const smokeMega12 = smokeMegaHigh(12);
+const smokeMega20 = smokeMegaHigh(20);
+
 const pass =
   v.tiles === 132 &&
   v.perFace === 11 &&
@@ -1207,6 +1280,9 @@ const pass =
   smokeMega5 &&
   smokeMega6 &&
   smokeMega7 &&
+  smokeMega8 &&
+  smokeMega12 &&
+  smokeMega20 &&
   starOrient4 &&
   starOrient6 &&
   parallelCut4 &&

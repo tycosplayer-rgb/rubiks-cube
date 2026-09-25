@@ -20,5 +20,5 @@
     "cubejs": "^1.3.2",
     "three": "^0.186.0"
   },
-  "description": "3D Rubik's Cube web app (cube/pyraminx/megaminx orders 2\u20137) with Three.js"
+  "description": "3D Rubik's Cube web app (cube/pyraminx/megaminx orders 2\u201320) with Three.js"
 }

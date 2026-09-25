@@ -30,7 +30,7 @@ interface PyraTile extends PolyTile {
 }
 
 /**
- * NxN Pyraminx (orders 2–7): turns about the four tip (vertex) axes, 120° each.
+ * NxN Pyraminx (orders 2–20): turns about the four tip (vertex) axes, 120° each.
  * Depth bands along each tip axis: 0 = tip … order-1 = bottom.
  * N=3 preserves classic tip / 层 / 底 thresholds and labels.
  */
@@ -61,7 +61,7 @@ export class Pyraminx extends PolyPuzzle {
     const order = typeof orderOrStyle === 'number' ? orderOrStyle : 3;
     const st = typeof orderOrStyle === 'number' ? style : orderOrStyle;
     super(st);
-    this.order = THREE.MathUtils.clamp(Math.round(order), 2, 7);
+    this.order = THREE.MathUtils.clamp(Math.round(order), 2, 20);
     this.build();
     this.finishBuild();
     this.computeDepthThresholds();
@@ -202,69 +202,21 @@ export class Pyraminx extends PolyPuzzle {
   }
 
   /**
-   * Build depthThresh from solved-state tip-0 projections.
-   * Cluster pattern: tip=1 cluster, each mid shell=2 clusters, bottom=rest.
-   * N=3 hardcodes classic 1.5 / 0.4 cuts.
+   * Build depthThresh cuts along tip→opposite-face height.
+   * Regular tetra tip at radius 2.7, opposite-face centroid at −2.7/3.
+   * Band k occupies height fraction [k/N, (k+1)/N); cut at (k+1)/N.
+   * N=3 keeps classic 1.5 / 0.4 (verify + feel); analytic would be 1.5 / 0.3.
+   * Scales cleanly to N=20 (cluster heuristics emptied mid-bands for N≥12).
    */
   private computeDepthThresholds(): void {
     if (this.order === 3) {
       this.depthThresh = [N3_TIP_THRESH, N3_DEEP_THRESH];
       return;
     }
-    this.group.updateMatrixWorld(true);
-    const axis = this.faces[0].axis;
-    const projs = this.tiles
-      .map((t) => this.tileWorldCenter(t, this.scratch).dot(axis))
-      .sort((a, b) => b - a);
-
-    type Cluster = { mean: number; vals: number[] };
-    const clusters: Cluster[] = [];
-    const GAP = 0.12;
-    for (const p of projs) {
-      const last = clusters[clusters.length - 1];
-      if (!last || last.mean - p > GAP) {
-        clusters.push({ mean: p, vals: [p] });
-      } else {
-        last.vals.push(p);
-        last.mean = last.vals.reduce((s, x) => s + x, 0) / last.vals.length;
-      }
-    }
-
-    // Assign clusters → depth bands.
-    const bandClusters: number[][] = Array.from({ length: this.order }, () => []);
-    if (!clusters.length) {
-      this.depthThresh = Array.from({ length: this.order - 1 }, (_, i) => 1.5 - i * 0.7);
-      return;
-    }
-    bandClusters[0].push(0);
-    let idx = 1;
-    for (let d = 1; d < this.order - 1; d++) {
-      // Two clusters per mid shell when available.
-      for (let take = 0; take < 2 && idx < clusters.length - 1; take++) {
-        bandClusters[d].push(idx++);
-      }
-      if (!bandClusters[d].length && idx < clusters.length - 1) {
-        bandClusters[d].push(idx++);
-      }
-    }
-    while (idx < clusters.length) bandClusters[this.order - 1].push(idx++);
-    // Ensure every band has at least a placeholder from neighbors if empty.
-    for (let d = 1; d < this.order; d++) {
-      if (!bandClusters[d].length) {
-        const prev = bandClusters[d - 1];
-        bandClusters[d].push(prev[prev.length - 1]);
-      }
-    }
-
-    const thresh: number[] = [];
-    for (let k = 0; k < this.order - 1; k++) {
-      const hiBand = bandClusters[k];
-      const loBand = bandClusters[k + 1];
-      const hiMin = Math.min(...hiBand.map((i) => Math.min(...clusters[i].vals)));
-      const loMax = Math.max(...loBand.map((i) => Math.max(...clusters[i].vals)));
-      thresh.push((hiMin + loMax) / 2);
-    }
-    this.depthThresh = thresh;
+    const N = this.order;
+    const tipP = 2.7;
+    const faceP = -2.7 / 3;
+    this.depthThresh = Array.from({ length: N - 1 }, (_, k) => tipP + (faceP - tipP) * ((k + 1) / N));
   }
 
   /**
@@ -685,7 +637,8 @@ export class Pyraminx extends PolyPuzzle {
 
     let tets: Tet[] = [[V[0], V[1], V[2], V[3]]];
     // Finer core for higher N so tip bands still get several pieces.
-    const levels = this.order <= 3 ? 3 : this.order <= 5 ? 4 : 4;
+    // Cap at 4 subdivision levels (4096 tets); enough tip-band cores up to N=20.
+    const levels = this.order <= 3 ? 3 : 4;
     for (let level = 0; level < levels; level++) tets = tets.flatMap(subdivide);
 
     const material = new THREE.MeshStandardMaterial({
@@ -764,7 +717,7 @@ export class Pyraminx extends PolyPuzzle {
   }
 
   protected scrambleLength(): number {
-    return 8 + this.order * 2;
+    return Math.min(8 + this.order * 2, 60);
   }
 
   /** Scramble: random tip + random depth band. */

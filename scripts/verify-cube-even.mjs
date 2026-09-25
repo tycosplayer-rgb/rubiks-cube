@@ -159,9 +159,31 @@ async function verifyOrder(N) {
   console.log(`order ${N}: done (${failures === 0 ? 'ok so far' : failures + ' failures so far'})`);
 }
 
-const orders = [2, 3, 4, 5, 6];
+const orders = [2, 3, 4, 5, 6, 7];
 for (const N of orders) {
   await verifyOrder(N);
+}
+
+/** Light high-N: construct + a few outer turns; full moveSeq for N=20 is too slow. */
+async function smokeHigh(N) {
+  console.log(`\n=== smoke order ${N} ===`);
+  const cube = new RubiksCube(N, 'sticker');
+  assertGrid(cube, `N=${N} initial`);
+  for (const axis of /** @type {const} */ (['x', 'y', 'z'])) {
+    await applyTurn(cube, { axis, layer: 0, turns: 1 });
+    assertGrid(cube, `N=${N} after ${axis}0`);
+    await applyTurn(cube, { axis, layer: N - 1, turns: 1 });
+    assertGrid(cube, `N=${N} after ${axis}${N - 1}`);
+  }
+  // Half-turn round-trip on outer face
+  await applyTurn(cube, { axis: 'y', layer: N - 1, turns: 2 });
+  await applyTurn(cube, { axis: 'y', layer: N - 1, turns: 2 });
+  assertGrid(cube, `N=${N} half round-trip`);
+  cube.dispose();
+  console.log(`smoke order ${N}: done`);
+}
+for (const N of [8, 12, 20]) {
+  await smokeHigh(N);
 }
 
 if (failures) {

@@ -44,7 +44,7 @@ interface MegaTile extends PolyTile {
 }
 
 /**
- * Dodecahedron Megaminx, orders 2–7.
+ * Dodecahedron Megaminx, orders 2–20.
  * N=3: classic star-cut (1 center + 5 edges + 5 corners).
  * N=2: Junior-like corners only.
  * N≥4: parallel-to-edge lattice (N stickers/edge; same k/N cuts).
@@ -81,7 +81,7 @@ export class Megaminx extends PolyPuzzle {
     const order = typeof orderOrStyle === 'number' ? orderOrStyle : 3;
     const st = typeof orderOrStyle === 'number' ? style : orderOrStyle;
     super(st);
-    this.order = THREE.MathUtils.clamp(Math.round(order), 2, 7);
+    this.order = THREE.MathUtils.clamp(Math.round(order), 2, 20);
     this.build();
     this.finishBuild();
     this.computeDepthThresholds();
@@ -1049,7 +1049,8 @@ export class Megaminx extends PolyPuzzle {
   }
 
   protected scrambleLength(): number {
-    return 16 + this.order * 4;
+    // Cap so N=20 does not freeze the UI on scramble.
+    return Math.min(16 + this.order * 4, 80);
   }
 
   /** Megaminx notation: U / 2U / 3U for depth 0 / 1 / 2 (2U = inner; U2 = 144°). */
@@ -1164,15 +1165,10 @@ export class Megaminx extends PolyPuzzle {
     const N = this.order;
     if (N === 2) return 5;
     if (N === 3) return 11;
-    // Even N≥4: parallel lattice hollowed by ★ void (no center; in-star rings dropped).
-    // N=4 → 20; N=5 → 31; N=6 → 45 (3 lines/dir to bisector); N=7 → 61.
-    if (N === 4) return 20;
-    if (N === 5) return 31;
-    if (N === 6) return 45;
-    if (N === 7) return 61;
-    if (N % 2 === 0) {
-      return 5 + 5 * (N - 2) + 1 + 5 * (N - 2) * (N / 2 - 1);
-    }
+    // N≥4 parallel lattice. Odd: filled center. Even: ★ void (no center).
+    // Odd: 5·⌊N/2⌋·⌈N/2⌉+1 (N=5→31, N=7→61, N=9→101).
+    // Even: 5·(N/2)² after ★ void (N=4→20, N=6→45, N=8→80, N=20→500).
+    if (N % 2 === 0) return (5 * N * N) / 4;
     return 5 * Math.floor(N / 2) * Math.ceil(N / 2) + 1;
   }
 
@@ -1269,45 +1265,20 @@ export class Megaminx extends PolyPuzzle {
         byPiece.size === 12 + 30 + 20;
     } else if (this.order === 2) {
       pieceGraphOk = pieceGraphOk && kinds.corner === 60 && kinds.center === 0 && kinds.edge === 0;
-    } else if (this.order === 4) {
-      // Parallel lattice + ★ void: 5 corners + 10 edges + 0 center + 5 rings / face → 20
-      // Totals: center 0, corner 60, edge 120, ring 60
+    } else if (this.order >= 4) {
+      // General N≥4: 5 corners + 5·(N−2) edges + (odd?1:0) center + rings / face.
+      const N = this.order;
+      const expectCenters = N % 2 === 0 ? 0 : 12;
+      const expectCorners = 60;
+      const expectEdges = 12 * 5 * (N - 2);
+      const expectRings =
+        12 * (this.expectedPerFace() - 5 - 5 * (N - 2) - (N % 2 === 0 ? 0 : 1));
       pieceGraphOk =
         pieceGraphOk &&
-        kinds.center === 0 &&
-        kinds.corner === 60 &&
-        kinds.edge === 120 &&
-        kinds.ring === 60 &&
-        this.expectedPerFace() === 20;
-    } else if (this.order === 5) {
-      // Parallel lattice (2 lines/dir): 5 corners + 15 edges + 1 center + 10 rings / face → 31
-      // Totals: center 12, corner 60, edge 180, ring 120
-      pieceGraphOk =
-        pieceGraphOk &&
-        kinds.center === 12 &&
-        kinds.corner === 60 &&
-        kinds.edge === 180 &&
-        kinds.ring === 120 &&
-        this.expectedPerFace() === 31;
-    } else if (this.order === 6) {
-      // Parallel lattice + ★ void (3 lines/dir to bisector): 5 corners + 20 edges + 0 center + 20 rings / face → 45
-      // Totals: center 0, corner 60, edge 240, ring 240
-      pieceGraphOk =
-        pieceGraphOk &&
-        kinds.center === 0 &&
-        kinds.corner === 60 &&
-        kinds.edge === 240 &&
-        kinds.ring === 240 &&
-        this.expectedPerFace() === 45;
-    } else if (this.order === 7) {
-      // Parallel lattice (3 lines/dir): 5 corners + 25 edges + 1 center + 30 rings / face → 61
-      pieceGraphOk =
-        pieceGraphOk &&
-        kinds.center === 12 &&
-        kinds.corner === 60 &&
-        kinds.edge === 300 &&
-        kinds.ring === 360 &&
-        this.expectedPerFace() === 61;
+        kinds.center === expectCenters &&
+        kinds.corner === expectCorners &&
+        kinds.edge === expectEdges &&
+        kinds.ring === expectRings;
     }
 
     const onFace = this.stickersOnFace(faceId).length;

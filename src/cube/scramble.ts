@@ -9,12 +9,14 @@ function randInt(n: number): number {
 
 /** Fair-ish random scramble: no consecutive same-axis moves; length scales with N */
 export function generateScramble(order: number): { moves: LayerMove[]; text: string; length: number } {
+  // Mild scale with hard cap — N=20 must not freeze the browser.
   const length =
     order === 2 ? 10 :
     order === 3 ? 25 :
     order === 4 ? 40 :
     order === 5 ? 60 :
-    order === 6 ? 80 : 100;
+    order === 6 ? 80 :
+    Math.min(100 + (order - 7) * 5, 140);
 
   const moves: LayerMove[] = [];
   let lastAxis: Axis | null = null;

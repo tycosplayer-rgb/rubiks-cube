@@ -629,6 +629,9 @@ function smokeOrder(N) {
 }
 const smoke2 = smokeOrder(2);
 const smoke7 = smokeOrder(7);
+const smoke8 = smokeOrder(8);
+const smoke12 = smokeOrder(12);
+const smoke20 = smokeOrder(20);
 
 const pass =
   v.tipCount === 3 &&
@@ -674,7 +677,10 @@ const pass =
   continuousOk &&
   coreSegmentOk &&
   smoke2 &&
-  smoke7;
+  smoke7 &&
+  smoke8 &&
+  smoke12 &&
+  smoke20;
 
 console.log({
   nDeep,

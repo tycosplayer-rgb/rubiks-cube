@@ -17,7 +17,7 @@ app.innerHTML = `
       <div class="panel-chrome">
         <div class="title">
           在线魔方
-          <span id="subtitle">标准配色 · 2×2–7×7</span>
+          <span id="subtitle">标准配色 · 2×2–20×20</span>
           <span class="swatches" title="U白 D黄 F绿 B蓝 R红 L橙" aria-hidden="true">
             <i style="background:${FACE_HEX.U}"></i><i style="background:${FACE_HEX.D}"></i>
             <i style="background:${FACE_HEX.F}"></i><i style="background:${FACE_HEX.B}"></i>
@@ -40,7 +40,7 @@ app.innerHTML = `
             </label>
             <label class="ctrl" id="order-ctrl">阶数
               <select id="order">
-                ${[2, 3, 4, 5, 6, 7].map((n) => `<option value="${n}" ${n === 3 ? 'selected' : ''}>${n}×${n}×${n}</option>`).join('')}
+                ${Array.from({length: 19}, (_, i) => i + 2).map((n) => `<option value="${n}" ${n === 3 ? 'selected' : ''}>${n}×${n}×${n}</option>`).join('')}
               </select>
             </label>
             <label class="ctrl">速度 <input id="speed" type="range" min="0.5" max="3" step="0.25" value="1" /></label>
@@ -169,7 +169,7 @@ function savePuzzleType(type: PuzzleType): void {
 function loadOrder(type: PuzzleType): number {
   try {
     const v = Number(localStorage.getItem(ORDER_KEYS[type]));
-    if (Number.isFinite(v) && v >= 2 && v <= 7) return Math.round(v);
+    if (Number.isFinite(v) && v >= 2 && v <= 20) return Math.round(v);
   } catch { /* ignore */ }
   return 3;
 }
@@ -192,8 +192,8 @@ function createPuzzle(type: PuzzleType): Puzzle {
 }
 function rebuildOrderOptions(type: PuzzleType): void {
   const order = orders[type];
-  const aliases: Record<number, string> = { 3: 'Megaminx', 5: 'Gigaminx', 7: 'Teraminx' };
-  const opts = [2, 3, 4, 5, 6, 7].map((n) => {
+  const aliases: Record<number, string> = { 3: 'Megaminx', 5: 'Gigaminx', 7: 'Teraminx', 9: 'Petaminx', 11: 'Examinx' };
+  const opts = Array.from({ length: 19 }, (_, i) => i + 2).map((n) => {
     // Keep the control compact; the well-known Megaminx names live in its tooltip.
     const label = type === 'cube' ? `${n}×${n}×${n}` : `${n}阶`;
     return `<option value="${n}" ${n === order ? 'selected' : ''}>${label}</option>`;
@@ -274,7 +274,7 @@ function updateTypeUI(): void {
   const n = orders[currentType];
   subtitleEl.textContent =
     currentType === 'cube'
-      ? '标准配色 · 2×2–7×7'
+      ? '标准配色 · 2×2–20×20'
       : currentType === 'pyraminx'
         ? `金字塔 · ${n}阶 · 四尖轴 120°`
         : `十二面体 · ${n}阶 · 72° 面转`;
@@ -331,7 +331,7 @@ for (const btn of modeBtns) btn.addEventListener('click', () => {
 typeSel.addEventListener('change', () => switchPuzzle(typeSel.value as PuzzleType));
 orderSel.addEventListener('change', () => {
   const n = Number(orderSel.value);
-  if (!Number.isFinite(n) || n < 2 || n > 7) return;
+  if (!Number.isFinite(n) || n < 2 || n > 20) return;
   orders[currentType] = n;
   saveOrder(currentType, n);
   switchPuzzle(currentType);

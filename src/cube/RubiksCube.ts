@@ -217,7 +217,7 @@ export class RubiksCube implements Puzzle {
   }
 
   setOrder(n: number): void {
-    if (n < 2 || n > 7 || n === this.order) {
+    if (n < 2 || n > 20 || n === this.order) {
       if (n === this.order) this.reset();
       return;
     }
