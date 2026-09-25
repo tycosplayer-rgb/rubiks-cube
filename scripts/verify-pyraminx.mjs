@@ -616,54 +616,71 @@ function smokeOrder(N) {
   let drift = 0;
   for (let i = 0; i < before.length; i++) drift = Math.max(drift, before[i].distanceTo(after[i]));
 
-  // Mid-layer: exact band non-empty; for N>3 wide tip-cap is a contiguous slab 0..mid
-  // with planar cut (no interleave with band mid+1).
+  // Mid-layer thin slice: ONLY band mid (not tip-cap 0..mid); planar vs neighbors.
   const mid = Math.min(3, N - 1);
-  const exactMid = q['selectLayer']({ kind: 'face', face: 'U', steps: 1, depth: mid }).length;
-  let wideOk = true;
+  const midSel = q['selectLayer']({ kind: 'face', face: 'U', steps: 1, depth: mid });
+  const exactMid = midSel.length;
+  let thinPlanarOk = exactMid === vv.bandCounts[mid] && exactMid > 0;
   if (N > 3 && mid > 0 && mid < N - 1) {
-    const wideSel = q['selectLayer']({ kind: 'face', face: 'U', steps: 1, depth: mid, wide: true });
-    const expectWide = vv.bandCounts.slice(0, mid + 1).reduce((s, c) => s + c, 0);
-    const wideProjs = wideSel.map((t) => {
+    const th = q.debugThresholds().all;
+    const depthOf = (d) => {
+      if (d > th[0]) return 0;
+      for (let k = 1; k < th.length; k++) if (d > th[k]) return k;
+      return N - 1;
+    };
+    const projOf = (t) => {
       const c = new THREE.Vector3();
       const attr = t.mesh.geometry.getAttribute('position');
       for (let i = 0; i < attr.count; i++) c.add(new THREE.Vector3().fromBufferAttribute(attr, i));
       return c.multiplyScalar(1 / attr.count).applyMatrix4(t.mesh.matrixWorld).dot(axis);
+    };
+    const midProjs = midSel.map(projOf);
+    // Thin-only: no tip (band 0) stickers in mid select when mid > 0.
+    const tipInMid = midSel.some((t) => depthOf(projOf(t)) === 0);
+    // Every selected sticker must classify as band mid.
+    const onlyMidBand = midSel.every((t) => depthOf(projOf(t)) === mid);
+    // Outer tip stickers must NOT move with mid turn.
+    const tipTiles = q['tiles'].filter((t) => depthOf(projOf(t)) === 0);
+    const tipBefore = tipTiles.map((t) => {
+      const c = new THREE.Vector3();
+      const attr = t.mesh.geometry.getAttribute('position');
+      for (let i = 0; i < attr.count; i++) c.add(new THREE.Vector3().fromBufferAttribute(attr, i));
+      return c.multiplyScalar(1 / attr.count).applyMatrix4(t.mesh.matrixWorld);
     });
-    const below = q['tiles']
-      .filter((t) => !wideSel.includes(t))
-      .map((t) => {
-        const c = new THREE.Vector3();
-        const attr = t.mesh.geometry.getAttribute('position');
-        for (let i = 0; i < attr.count; i++) c.add(new THREE.Vector3().fromBufferAttribute(attr, i));
-        return c.multiplyScalar(1 / attr.count).applyMatrix4(t.mesh.matrixWorld).dot(axis);
-      });
-    const wideMin = Math.min(...wideProjs);
-    const belowMax = Math.max(...below.filter((d) => d < wideMin + 1)); // neighbors below
-    // Contiguous slab: every selected proj > every band-(mid+1) sticker proj
-    const bandBelow = q['tiles']
-      .map((t) => {
-        const c = new THREE.Vector3();
-        const attr = t.mesh.geometry.getAttribute('position');
-        for (let i = 0; i < attr.count; i++) c.add(new THREE.Vector3().fromBufferAttribute(attr, i));
-        return c.multiplyScalar(1 / attr.count).applyMatrix4(t.mesh.matrixWorld).dot(axis);
-      })
-      .filter((d) => {
-        // depthOf via thresh
-        const th = q.debugThresholds().all;
-        let band = N - 1;
-        if (d > th[0]) band = 0;
-        else {
-          for (let k = 1; k < th.length; k++) if (d > th[k]) { band = k; break; }
-        }
-        return band === mid + 1;
-      });
-    const noInterleave = bandBelow.length === 0 || Math.min(...wideProjs) > Math.max(...bandBelow);
-    wideOk =
-      wideSel.length === expectWide &&
+    {
+      const move = { kind: 'face', face: 'U', steps: 1, depth: mid };
+      const selected = q['selectLayer'](move);
+      const pivot = q['pivot'];
+      pivot.rotation.set(0, 0, 0);
+      for (const tile of selected) reparent(tile.mesh, pivot);
+      pivot.setRotationFromAxisAngle(axis, q['turnAngle'](move));
+      q.group.updateMatrixWorld(true);
+      for (const tile of selected) reparent(tile.mesh, q.group);
+      pivot.rotation.set(0, 0, 0);
+    }
+    q.group.updateMatrixWorld(true);
+    const tipAfter = tipTiles.map((t) => {
+      const c = new THREE.Vector3();
+      const attr = t.mesh.geometry.getAttribute('position');
+      for (let i = 0; i < attr.count; i++) c.add(new THREE.Vector3().fromBufferAttribute(attr, i));
+      return c.multiplyScalar(1 / attr.count).applyMatrix4(t.mesh.matrixWorld);
+    });
+    let tipDriftMid = 0;
+    for (let i = 0; i < tipBefore.length; i++) tipDriftMid = Math.max(tipDriftMid, tipBefore[i].distanceTo(tipAfter[i]));
+    // Planar: mid band projs strictly above band mid+1 and below band mid-1.
+    const bandAbove = q['tiles'].map(projOf).filter((d) => depthOf(d) === mid - 1);
+    const bandBelow = q['tiles'].map(projOf).filter((d) => depthOf(d) === mid + 1);
+    const noZigzagBelow = bandBelow.length === 0 || Math.min(...midProjs) > Math.max(...bandBelow);
+    const noZigzagAbove = bandAbove.length === 0 || Math.max(...midProjs) < Math.min(...bandAbove);
+    const noWideButton = !q.getFaceButtons().some((b) => b.depth === mid && b.wide === true);
+    thinPlanarOk =
       exactMid === vv.bandCounts[mid] &&
-      noInterleave &&
-      q.getFaceButtons().some((b) => b.depth === mid && b.wide === true);
+      onlyMidBand &&
+      !tipInMid &&
+      tipDriftMid < 0.05 &&
+      noZigzagBelow &&
+      noZigzagAbove &&
+      noWideButton;
   }
 
   const ok =
@@ -677,7 +694,7 @@ function smokeOrder(N) {
     tipN === 3 &&
     drift < 0.05 &&
     q.getFaceButtons().length === N * 4 &&
-    wideOk;
+    thinPlanarOk;
   console.log('smokeOrder', N, {
     bands: vv.bandCounts,
     tipN,
@@ -686,7 +703,7 @@ function smokeOrder(N) {
     planarCuts: vv.planarCuts,
     discreteMatch: vv.discreteMatch,
     exactMid,
-    wideOk,
+    thinPlanarOk,
     ok,
   });
   return ok;

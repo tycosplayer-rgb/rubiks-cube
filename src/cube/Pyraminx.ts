@@ -285,7 +285,7 @@ export class Pyraminx extends PolyPuzzle {
     point: THREE.Vector3,
     normal: THREE.Vector3,
     camera: THREE.Camera,
-  ): { face: string; tip?: boolean; bottom?: boolean; depth: number; wide?: boolean } | null {
+  ): { face: string; tip?: boolean; bottom?: boolean; depth: number } | null {
     this.group.updateMatrixWorld(true);
 
     const tipPiece = Number(mesh.userData.tipPiece ?? -1);
@@ -400,15 +400,13 @@ export class Pyraminx extends PolyPuzzle {
   private packLayer(
     face: string,
     depth: number,
-  ): { face: string; tip?: boolean; bottom?: boolean; depth: number; wide?: boolean } {
+  ): { face: string; tip?: boolean; bottom?: boolean; depth: number } {
     const d = THREE.MathUtils.clamp(depth, 0, this.order - 1);
-    const wide = this.order > 3 && d > 0 && d < this.order - 1;
     return {
       face,
       depth: d,
       ...(d === 0 ? { tip: true } : {}),
       ...(d === this.order - 1 ? { bottom: true } : {}),
-      ...(wide ? { wide: true } : {}),
     };
   }
 
@@ -438,7 +436,6 @@ export class Pyraminx extends PolyPuzzle {
       depth: layer.depth,
       ...(layer.tip ? { tip: true } : {}),
       ...(layer.bottom ? { bottom: true } : {}),
-      ...(layer.wide ? { wide: true } : {}),
     };
     this.layerDragGeom = {
       session,
@@ -664,7 +661,6 @@ export class Pyraminx extends PolyPuzzle {
       depth: packed.depth,
       ...(packed.tip ? { tip: true } : {}),
       ...(packed.bottom ? { bottom: true } : {}),
-      ...(packed.wide ? { wide: true } : {}),
     };
   }
 
@@ -759,11 +755,10 @@ export class Pyraminx extends PolyPuzzle {
     const axis = this.faceOf(move.face).axis;
     const scratch = this.scratch;
     const depth = this.resolveDepth(move);
-    const wide = !!move.wide && depth > 0 && depth < this.order - 1;
     return this.corePieces
       .filter((cp) => {
         const band = this.depthOfProjection(this.coreWorldCenter(cp.mesh, scratch).dot(axis));
-        return wide ? band <= depth : band === depth;
+        return band === depth;
       })
       .map((cp) => cp.mesh);
   }
@@ -772,13 +767,13 @@ export class Pyraminx extends PolyPuzzle {
     this.group.updateMatrixWorld(true);
     const axis = this.faceOf(move.face).axis;
     const depth = this.resolveDepth(move);
+    // Thin slice only: depth k turns band k alone (not tip-cap 0..k).
     // Thresholds sit in mid-gaps of discrete tipDepth row slabs, so centroid
-    // projection cannot split an up/down pair in the same geometric row.
-    // Mid-layer buttons on N>3 pass wide: tip-cap slabs 0..depth (one planar cut).
-    const wide = !!move.wide && depth > 0 && depth < this.order - 1;
+    // projection cannot split an up/down pair in the same geometric row —
+    // planar cuts without sawtooth even for thin mid rings at high N.
     return this.tiles.filter((tile) => {
       const band = this.depthOfProjection(this.tileWorldCenter(tile, this.scratch).dot(axis));
-      return wide ? band <= depth : band === depth;
+      return band === depth;
     });
   }
 
@@ -814,7 +809,6 @@ export class Pyraminx extends PolyPuzzle {
         depth: packed.depth,
         ...(packed.tip ? { tip: true } : {}),
         ...(packed.bottom ? { bottom: true } : {}),
-        ...(packed.wide ? { wide: true } : {}),
       });
     }
     this.emit({ type: 'scramble', text: moves.map((m) => this.notation(m)).join(' '), length });
@@ -854,8 +848,6 @@ export class Pyraminx extends PolyPuzzle {
         } else {
           label = `${f.label}${depth}`;
         }
-        // N>3 mid-layers: wide tip-cap through this depth (one planar cut, not a thin zigzag ring).
-        const wide = this.order > 3 && depth > 0 && depth < this.order - 1;
         buttons.push({
           id: f.id,
           label,
@@ -863,7 +855,6 @@ export class Pyraminx extends PolyPuzzle {
           depth: packed.depth,
           ...(packed.tip ? { tip: true } : {}),
           ...(packed.bottom ? { bottom: true } : {}),
-          ...(wide ? { wide: true } : {}),
         });
       }
     }

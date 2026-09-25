@@ -36,8 +36,8 @@ export interface FaceTurnMove {
   /** Pyraminx bottom layer (far band + base tips) about the tip axis when true (alias for depth N-1). */
   bottom?: boolean;
   /**
-   * Pyraminx wide tip-cap: turn all depth bands 0..depth together (N>3 mid-layer buttons).
-   * Tip (0) and bottom (N-1) stay single-band; N=3 层 stays single mid-band.
+   * Optional wide flag (unused for Pyraminx: mid depths are thin single-band slices).
+   * Kept for move/UI schema compat; selectLayer ignores it.
    */
   wide?: boolean;
 }
@@ -58,7 +58,7 @@ export interface FaceButton {
   bottom?: boolean;
   /** Explicit depth band for pyraminx (preferred over tip/bottom for N≠3). */
   depth?: number;
-  /** Wide tip-cap through `depth` (N>3 mid-layer buttons). */
+  /** Optional wide flag (unused for Pyraminx thin mid slices). */
   wide?: boolean;
 }
 
