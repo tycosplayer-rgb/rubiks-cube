@@ -57,7 +57,8 @@ interface MegaTile extends PolyTile {
  *       shows through. N≥5: filled center (unchanged).
  *
  * Face turns 72°. Turnable layers per face axis: L = ⌊N/2⌋ (depth 0 = outer face;
- * depth 1..L-1 = successive inner bands by axis projection). N=2/3 → outer only.
+ * depth 1..L-1 = successive thin lattice-step rings — not equal half-puzzle slabs).
+ * N=2/3 → outer only.
  */
 export class Megaminx extends PolyPuzzle {
   readonly puzzleType = 'megaminx' as const;
@@ -67,11 +68,11 @@ export class Megaminx extends PolyPuzzle {
   private readonly starVoids: { faceId: string; tips: number[][]; dents: number[][] }[] = [];
   private readonly scratch = new THREE.Vector3();
   /**
-   * Equal-width parallel-slab cuts along a face axis (high→low).
+   * Thin parallel-slab cuts along a face axis (high→low), one lattice step each.
    * Length = L = ⌊N/2⌋:
-   *   depth 0: d > thresh[0]  (thresh[0] = FACE_LAYER_THRESH)
-   *   depth k: thresh[k] < d ≤ thresh[k-1]
-   * Deepest band lower-bounded by thresh[L-1] = 0 (equator).
+   *   depth 0: d > thresh[0]  (thresh[0] = FACE_LAYER_THRESH) — outer face
+   *   depth k: thresh[k] < d ≤ thresh[k-1] — next thin ring (not half-puzzle)
+   * Deepest lower bound is just below the L-th lattice ring (not the equator).
    */
   private depthThresh: number[] = [FACE_LAYER_THRESH];
 
@@ -127,18 +128,23 @@ export class Megaminx extends PolyPuzzle {
   }
 
   /**
-   * Build depthThresh as equal-width geometric slabs parallel to the face
-   * (Master Kilominx / Gigaminx SSE layer model).
+   * Build depthThresh as thin lattice-step slabs parallel to the face
+   * (Master Kilominx / Gigaminx SSE: 2R = next ring only, not a wide belt).
    *
-   * Region from the outer-face cut (FACE_LAYER_THRESH) down to the equator
-   * (proj≈0) is partitioned into (L−1) equal-width bands for depths 1..L−1.
-   * Depth 0 stays the outer face (stickers with proj > FACE_LAYER_THRESH).
+   * Depth 0: outer face (proj > FACE_LAYER_THRESH).
+   * Depth k≥1: the k-th thin ring just inside the outer cut — pieces on
+   * adjacent faces whose axis projection sits one lattice cell inward from
+   * the shared edge (the red-line belt), NOT the equal split of [0, thresh]
+   * down to the equator (that made N=4 2R grab half the puzzle).
+   *
+   * Geometry: adjacent face axes meet at φ = 1/√5. Shared-edge mid projects
+   * to edgeMidU = faceDist·φ + apothem·sinθ. One lattice cell along the face
+   * apothem is cellW = apothem·(2/N); Δu = cellW·sinθ along the turn axis.
+   * Lower bound of depth k sits midway between rings k and k+1:
+   *   thresh[k] = edgeMidU − (k + ½)·Δu
    *
    *   depth 0: d > thresh[0]   (thresh[0] = FACE_LAYER_THRESH)
    *   depth k: thresh[k] < d ≤ thresh[k−1]
-   * Deepest lower bound thresh[L−1] = 0 (equator).
-   *
-   * Cuts are constant projection on the face axis — NOT 72° orbit clustering.
    */
   private computeDepthThresholds(): void {
     const L = this.layerCount();
@@ -146,11 +152,43 @@ export class Megaminx extends PolyPuzzle {
       this.depthThresh = [FACE_LAYER_THRESH];
       return;
     }
+    this.group.updateMatrixWorld(true);
+    const axis = this.faces[0].axis;
+    const onFace = this.megaTiles.filter(
+      (t) => this.tileWorldCenter(t, this.scratch).dot(axis) > FACE_LAYER_THRESH,
+    );
+    // Face sticker distance from origin (≈2.211 with outset).
+    let faceDist = 0;
+    for (const t of onFace) faceDist += this.tileWorldCenter(t, this.scratch).dot(axis);
+    faceDist /= Math.max(1, onFace.length);
+
+    // Face-center ≈ mean of on-face sticker centers; apothem from outer verts.
+    const faceC = new THREE.Vector3();
+    for (const t of onFace) faceC.add(this.tileWorldCenter(t));
+    faceC.multiplyScalar(1 / Math.max(1, onFace.length));
+    let vertR = 0;
+    const v = new THREE.Vector3();
+    for (const t of onFace) {
+      if (t.kind !== 'corner') continue;
+      const attr = t.mesh.geometry.getAttribute('position');
+      for (let i = 0; i < attr.count; i++) {
+        v.fromBufferAttribute(attr, i).applyMatrix4(t.mesh.matrixWorld);
+        const rad = v.clone().sub(faceC);
+        rad.addScaledVector(axis, -rad.dot(axis));
+        vertR = Math.max(vertR, rad.length());
+      }
+    }
+    // Regular pentagon: apothem = R·cos(π/5). Fallback if no corners yet.
+    const apothem = vertR > 1e-6 ? vertR * Math.cos(Math.PI / 5) : 1.325;
+    const phi = 1 / Math.sqrt(5); // adjacent dodecahedron face-axis dot
+    const sint = Math.sqrt(1 - phi * phi);
+    const edgeMidU = faceDist * phi + apothem * sint;
+    const deltaU = apothem * (2 / this.order) * sint;
+
     const thresh: number[] = [FACE_LAYER_THRESH];
-    const innerCount = L - 1;
-    for (let k = 1; k <= innerCount; k++) {
-      // Equal-width: k=1 → just below outer; k=innerCount → equator (0).
-      thresh.push(FACE_LAYER_THRESH * ((innerCount - k) / innerCount));
+    for (let k = 1; k < L; k++) {
+      // Midway between lattice ring k and ring k+1 (thin band, not to equator).
+      thresh.push(Math.max(0, edgeMidU - (k + 0.5) * deltaU));
     }
     this.depthThresh = thresh;
   }

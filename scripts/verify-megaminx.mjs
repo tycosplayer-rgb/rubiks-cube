@@ -905,7 +905,7 @@ const parallelCut5 = assertParallelCuts(5);
 const parallelCut6 = assertParallelCuts(6);
 const parallelCut7 = assertParallelCuts(7);
 
-// --- Multi-slice depth bands (N≥4): equal-width parallel slabs, closed orbits ---
+// --- Multi-slice depth bands (N≥4): thin lattice-step slabs, closed orbits ---
 const FACE_LAYER_THRESH = 2.17;
 function assertMultiDepth(N) {
   const q = new Megaminx(N, 'sticker');
@@ -920,8 +920,8 @@ function assertMultiDepth(N) {
     console.error('multiDepth', N, 'bands overlap');
     return false;
   }
-  // Equal-width geometric slabs: thresh[0]=FACE_LAYER_THRESH, thresh[L-1]=0,
-  // intermediate cuts equally spaced.
+  // Thin lattice-step slabs: thresh[0]=FACE_LAYER_THRESH; depth k≥1 is a narrow
+  // ring just inside the outer cut (NOT equal split of [0, thresh] to equator).
   const thresh = q.debugThresholds();
   if (thresh.length !== L) {
     console.error('multiDepth', N, 'thresh length', thresh.length, 'expected', L);
@@ -931,18 +931,24 @@ function assertMultiDepth(N) {
     console.error('multiDepth', N, 'thresh[0]', thresh[0], 'expected', FACE_LAYER_THRESH);
     return false;
   }
-  if (L > 1 && Math.abs(thresh[L - 1]) > 1e-9) {
-    console.error('multiDepth', N, 'thresh equator', thresh[L - 1], 'expected 0');
+  // Inner lower bounds must be strictly decreasing and well above the equator
+  // (thin rings — old equal-width put thresh[L-1]=0 and grabbed half the puzzle).
+  for (let k = 1; k < L; k++) {
+    if (!(thresh[k] < thresh[k - 1] - 0.05)) {
+      console.error('multiDepth', N, 'thresh not decreasing', thresh);
+      return false;
+    }
+  }
+  if (L > 1 && thresh[L - 1] < 0.5) {
+    console.error('multiDepth', N, 'deepest thresh too low (wide belt?)', thresh[L - 1]);
     return false;
   }
-  if (L > 2) {
-    const w = FACE_LAYER_THRESH / (L - 1);
-    for (let k = 1; k < L - 1; k++) {
-      const expect = FACE_LAYER_THRESH - k * w;
-      if (Math.abs(thresh[k] - expect) > 1e-6) {
-        console.error('multiDepth', N, 'unequal slab', k, thresh[k], expect);
-        return false;
-      }
+  // Band width of depth 1 must be a thin lattice step, not ≈FACE_LAYER_THRESH.
+  if (L > 1) {
+    const band1Width = thresh[0] - thresh[1];
+    if (band1Width > FACE_LAYER_THRESH * 0.55) {
+      console.error('multiDepth', N, 'depth-1 band too wide', band1Width, thresh);
+      return false;
     }
   }
   for (let d = 0; d < L; d++) {
@@ -989,20 +995,10 @@ function assertMultiDepth(N) {
 
   if (L > 1) {
     q.reset();
-    // Snapshot U-face sticker piece ids — inner turn must not move them
-    const uFaceBefore = new Set(
-      q.stickersOnFace('U').map((t) => t.pieceId),
-    );
     const n1 = apply('U', 1, 1);
     if (n1 !== vv.bandCounts[1]) {
       console.error('multiDepth', N, 'inner select size', n1, vv.bandCounts[1]);
       return false;
-    }
-    const innerSel = q['selectLayer']({ kind: 'face', face: 'U', steps: 1, depth: 1 });
-    for (const t of innerSel) {
-      if (uFaceBefore.has(t.pieceId) && q.stickersOnFace('U').some((s) => s === t)) {
-        // piece may be multi-face; ensure no selected tile is currently an on-U sticker
-      }
     }
     // After one inner turn, U face sticker count still full (outer untouched)
     if (q.stickersOnFace('U').length !== expected) {
@@ -1037,37 +1033,82 @@ function assertMultiDepth(N) {
       console.error('multiDepth', N, 'outer/inner piece overlap', overlap);
       return false;
     }
-    // N=4 star / N≥5 lattice: outer band must cover at least expected on-face stickers;
-    // inner = non-empty belt, no U-face stickers in selection.
-    if (N === 4 || N === 5) {
-      if (vv.bandCounts[0] < expected) {
-        console.error('multiDepth', N, 'outer too small', vv.bandCounts[0], expected);
+    // Thin ring: outer covers on-face stickers; inner is non-empty, no on-face stickers,
+    // and much smaller than the old half-puzzle belt (which was ~100 tiles for N=4).
+    if (vv.bandCounts[0] < expected) {
+      console.error('multiDepth', N, 'outer too small', vv.bandCounts[0], expected);
+      return false;
+    }
+    if (vv.bandCounts[1] < 15) {
+      console.error('multiDepth', N, 'inner belt empty/tiny', vv.bandCounts[1]);
+      return false;
+    }
+    // Inner must be a thin ring: fewer tiles than outer (N=4 was wrongly ~100 vs 40).
+    if (vv.bandCounts[1] >= vv.bandCounts[0] * 1.5) {
+      console.error('multiDepth', N, 'inner not thin vs outer', vv.bandCounts);
+      return false;
+    }
+    const innerTiles = q['selectLayer']({ kind: 'face', face: 'U', steps: 1, depth: 1 });
+    const axis = q['faceOf']('U').axis;
+    let onU = 0;
+    for (const t of innerTiles) {
+      if (q['tileWorldCenter'](t).dot(axis) > FACE_LAYER_THRESH) onU++;
+    }
+    if (onU !== 0) {
+      console.error('multiDepth', N, 'inner selects U-face stickers', onU);
+      return false;
+    }
+    // After one 2U: outer U-face piece ids unchanged AND zero positional drift
+    q.reset();
+    const beforeIds = q.stickersOnFace('U').map((t) => t.pieceId).sort().join(',');
+    const uTiles = q.stickersOnFace('U');
+    const snap = uTiles.map((t) => ({ mesh: t.mesh, c: q['tileWorldCenter'](t).clone() }));
+    apply('U', 1, 1);
+    const afterIds = q.stickersOnFace('U').map((t) => t.pieceId).sort().join(',');
+    if (beforeIds !== afterIds) {
+      console.error('multiDepth', N, '2U moved outer U-face piece set');
+      return false;
+    }
+    let outerDrift = 0;
+    for (const s of snap) {
+      const c = new THREE.Vector3();
+      const attr = s.mesh.geometry.getAttribute('position');
+      for (let i = 0; i < attr.count; i++) c.add(new THREE.Vector3().fromBufferAttribute(attr, i));
+      c.multiplyScalar(1 / attr.count).applyMatrix4(s.mesh.matrixWorld);
+      outerDrift = Math.max(outerDrift, s.c.distanceTo(c));
+    }
+    if (outerDrift > 1e-6) {
+      console.error('multiDepth', N, '2U drifted outer-face stickers', outerDrift);
+      return false;
+    }
+    q.reset();
+
+    // Log R vs 2R piece/tile counts (Master Kilominx red-line ring check)
+    const rTiles = q['selectLayer']({ kind: 'face', face: 'R', steps: 1 });
+    const r2Tiles = q['selectLayer']({ kind: 'face', face: 'R', steps: 1, depth: 1 });
+    const rPieces = new Set(rTiles.map((t) => t.pieceId)).size;
+    const r2Pieces = new Set(r2Tiles.map((t) => t.pieceId)).size;
+    console.log('layerCounts', N, {
+      R: { tiles: rTiles.length, pieces: rPieces },
+      '2R': { tiles: r2Tiles.length, pieces: r2Pieces },
+      thresh: thresh.map((t) => +t.toFixed(4)),
+    });
+    // N=4: thin 2R ring ≈ 20 tiles / 15 pieces (not ~100 tiles)
+    if (N === 4) {
+      if (rTiles.length !== 40 || rPieces !== 20) {
+        console.error('multiDepth', N, 'R counts', rTiles.length, rPieces);
         return false;
       }
-      if (vv.bandCounts[1] < 20) {
-        console.error('multiDepth', N, 'inner belt empty/tiny', vv.bandCounts[1]);
+      if (r2Tiles.length !== 20 || r2Pieces !== 15) {
+        console.error('multiDepth', N, '2R thin ring counts', r2Tiles.length, r2Pieces);
         return false;
       }
-      const innerTiles = q['selectLayer']({ kind: 'face', face: 'U', steps: 1, depth: 1 });
-      const axis = q['faceOf']('U').axis;
-      let onU = 0;
-      for (const t of innerTiles) {
-        if (q['tileWorldCenter'](t).dot(axis) > FACE_LAYER_THRESH) onU++;
-      }
-      if (onU !== 0) {
-        console.error('multiDepth', N, 'inner moves U-face stickers', onU);
+    }
+    if (N === 5) {
+      if (r2Tiles.length !== 25 || r2Pieces !== 20) {
+        console.error('multiDepth', N, '2R Gigaminx counts', r2Tiles.length, r2Pieces);
         return false;
       }
-      // Gigaminx/Master: after one 2U, every U-face sticker piece id unchanged
-      q.reset();
-      const beforeIds = q.stickersOnFace('U').map((t) => t.pieceId).sort().join(',');
-      apply('U', 1, 1);
-      const afterIds = q.stickersOnFace('U').map((t) => t.pieceId).sort().join(',');
-      if (beforeIds !== afterIds) {
-        console.error('multiDepth', N, '2U moved outer U-face piece set');
-        return false;
-      }
-      q.reset();
     }
   }
   console.log('multiDepth', N, {
