@@ -27,6 +27,12 @@ interface PyraTile extends PolyTile {
   tipPiece: number;
   /** Face index (0..3) the sticker sits on — color source. */
   faceIndex: number;
+  /**
+   * Discrete tip-axis depth band 0..order-1 for each of the four tips.
+   * Built from face-grid row index (not centroid projection), so up- and
+   * down-pointing facelets in the same geometric row share one band.
+   */
+  tipDepth: number[];
 }
 
 /**
@@ -152,7 +158,21 @@ export class Pyraminx extends PolyPuzzle {
           .add(c.clone().sub(a).multiplyScalar(j / n))
           .add(off);
 
-      const addTri = (v0: THREE.Vector3, v1: THREE.Vector3, v2: THREE.Vector3, tipPiece: number) => {
+      const tipDepthOf = (rowA: number, rowB: number, rowC: number): number[] => {
+        const td = [n - 1, n - 1, n - 1, n - 1];
+        td[ta] = rowA;
+        td[tb] = rowB;
+        td[tc] = rowC;
+        return td;
+      };
+
+      const addTri = (
+        v0: THREE.Vector3,
+        v1: THREE.Vector3,
+        v2: THREE.Vector3,
+        tipPiece: number,
+        tipDepth: number[],
+      ) => {
         const centroid = v0.clone().add(v1).add(v2).multiplyScalar(1 / 3);
         const shrink = (v: THREE.Vector3) => centroid.clone().lerp(v, STICKER_SHRINK);
         const geo = new THREE.BufferGeometry().setFromPoints([shrink(v0), shrink(v1), shrink(v2)]);
@@ -173,8 +193,10 @@ export class Pyraminx extends PolyPuzzle {
         const tile = this.tiles[this.tiles.length - 1] as PyraTile;
         tile.tipPiece = tipPiece;
         tile.faceIndex = faceIndex;
+        tile.tipDepth = tipDepth;
         tile.mesh.userData.tipPiece = tipPiece;
         tile.mesh.userData.faceIndex = faceIndex;
+        tile.mesh.userData.tipDepth = tipDepth;
         tile.mesh.material.polygonOffset = true;
         tile.mesh.material.polygonOffsetFactor = -4;
         tile.mesh.material.polygonOffsetUnits = -4;
@@ -183,40 +205,75 @@ export class Pyraminx extends PolyPuzzle {
       };
 
       // Up-pointing cells: corners at (0,0)->tip a, (n,0)->tip b, (0,n)->tip c.
+      // Discrete tip-row: from a = i+j; from b = n-1-i; from c = n-1-j.
       for (let i = 0; i < n; i++) {
         for (let j = 0; j < n - i; j++) {
           let tipPiece = -1;
           if (i === 0 && j === 0) tipPiece = ta;
           else if (i === n - 1 && j === 0) tipPiece = tb;
           else if (i === 0 && j === n - 1) tipPiece = tc;
-          addTri(p(i, j), p(i + 1, j), p(i, j + 1), tipPiece);
+          addTri(
+            p(i, j),
+            p(i + 1, j),
+            p(i, j + 1),
+            tipPiece,
+            tipDepthOf(i + j, n - 1 - i, n - 1 - j),
+          );
         }
       }
       // Down-pointing fillers — not tip stickers.
+      // Discrete tip-row: from a = i+j+1; from b = n-1-i; from c = n-1-j.
       for (let i = 0; i < n - 1; i++) {
         for (let j = 0; j < n - 1 - i; j++) {
-          addTri(p(i + 1, j), p(i + 1, j + 1), p(i, j + 1), -1);
+          addTri(
+            p(i + 1, j),
+            p(i + 1, j + 1),
+            p(i, j + 1),
+            -1,
+            tipDepthOf(i + j + 1, n - 1 - i, n - 1 - j),
+          );
         }
       }
     }
   }
 
   /**
-   * Build depthThresh cuts along tip→opposite-face height.
-   * Regular tetra tip at radius 2.7, opposite-face centroid at −2.7/3.
-   * Band k occupies height fraction [k/N, (k+1)/N); cut at (k+1)/N.
-   * N=3 keeps classic 1.5 / 0.4 (verify + feel); analytic would be 1.5 / 0.3.
-   * Scales cleanly to N=20 (cluster heuristics emptied mid-bands for N≥12).
+   * Build depthThresh from discrete tip-row bands (tipDepth), not equal-fraction
+   * analytic planes through sticker centroids.
+   * Up/down facelets in one grid row share tipDepth, so cuts sit in the gaps
+   * between row slabs and stay planar at high N (centroid planes sawtooth).
+   * N=3 keeps classic 1.5 / 0.4 (verify + feel).
    */
   private computeDepthThresholds(): void {
     if (this.order === 3) {
       this.depthThresh = [N3_TIP_THRESH, N3_DEEP_THRESH];
       return;
     }
+    this.group.updateMatrixWorld(true);
+    const axis = this.faces[0].axis;
     const N = this.order;
-    const tipP = 2.7;
-    const faceP = -2.7 / 3;
-    this.depthThresh = Array.from({ length: N - 1 }, (_, k) => tipP + (faceP - tipP) * ((k + 1) / N));
+    const bandMin = Array.from({ length: N }, () => Infinity);
+    const bandMax = Array.from({ length: N }, () => -Infinity);
+    for (const tile of this.pyraTiles) {
+      const d = this.tileWorldCenter(tile, this.scratch).dot(axis);
+      const band = tile.tipDepth[0];
+      if (d < bandMin[band]) bandMin[band] = d;
+      if (d > bandMax[band]) bandMax[band] = d;
+    }
+    const thresh: number[] = [];
+    for (let k = 0; k < N - 1; k++) {
+      const hi = bandMin[k];
+      const lo = bandMax[k + 1];
+      if (!Number.isFinite(hi) || !Number.isFinite(lo)) {
+        // Fallback: analytic tip→face fraction (should not hit when bands are full).
+        const tipP = 2.7;
+        const faceP = -2.7 / 3;
+        thresh.push(tipP + (faceP - tipP) * ((k + 1) / N));
+      } else {
+        thresh.push((hi + lo) / 2);
+      }
+    }
+    this.depthThresh = thresh;
   }
 
   /**
@@ -228,7 +285,7 @@ export class Pyraminx extends PolyPuzzle {
     point: THREE.Vector3,
     normal: THREE.Vector3,
     camera: THREE.Camera,
-  ): { face: string; tip?: boolean; bottom?: boolean; depth: number } | null {
+  ): { face: string; tip?: boolean; bottom?: boolean; depth: number; wide?: boolean } | null {
     this.group.updateMatrixWorld(true);
 
     const tipPiece = Number(mesh.userData.tipPiece ?? -1);
@@ -343,13 +400,15 @@ export class Pyraminx extends PolyPuzzle {
   private packLayer(
     face: string,
     depth: number,
-  ): { face: string; tip?: boolean; bottom?: boolean; depth: number } {
+  ): { face: string; tip?: boolean; bottom?: boolean; depth: number; wide?: boolean } {
     const d = THREE.MathUtils.clamp(depth, 0, this.order - 1);
+    const wide = this.order > 3 && d > 0 && d < this.order - 1;
     return {
       face,
       depth: d,
       ...(d === 0 ? { tip: true } : {}),
       ...(d === this.order - 1 ? { bottom: true } : {}),
+      ...(wide ? { wide: true } : {}),
     };
   }
 
@@ -379,6 +438,7 @@ export class Pyraminx extends PolyPuzzle {
       depth: layer.depth,
       ...(layer.tip ? { tip: true } : {}),
       ...(layer.bottom ? { bottom: true } : {}),
+      ...(layer.wide ? { wide: true } : {}),
     };
     this.layerDragGeom = {
       session,
@@ -604,6 +664,7 @@ export class Pyraminx extends PolyPuzzle {
       depth: packed.depth,
       ...(packed.tip ? { tip: true } : {}),
       ...(packed.bottom ? { bottom: true } : {}),
+      ...(packed.wide ? { wide: true } : {}),
     };
   }
 
@@ -698,8 +759,12 @@ export class Pyraminx extends PolyPuzzle {
     const axis = this.faceOf(move.face).axis;
     const scratch = this.scratch;
     const depth = this.resolveDepth(move);
+    const wide = !!move.wide && depth > 0 && depth < this.order - 1;
     return this.corePieces
-      .filter((cp) => this.inDepth(this.coreWorldCenter(cp.mesh, scratch).dot(axis), depth))
+      .filter((cp) => {
+        const band = this.depthOfProjection(this.coreWorldCenter(cp.mesh, scratch).dot(axis));
+        return wide ? band <= depth : band === depth;
+      })
       .map((cp) => cp.mesh);
   }
 
@@ -707,9 +772,14 @@ export class Pyraminx extends PolyPuzzle {
     this.group.updateMatrixWorld(true);
     const axis = this.faceOf(move.face).axis;
     const depth = this.resolveDepth(move);
-    return this.tiles.filter((tile) =>
-      this.inDepth(this.tileWorldCenter(tile, this.scratch).dot(axis), depth),
-    );
+    // Thresholds sit in mid-gaps of discrete tipDepth row slabs, so centroid
+    // projection cannot split an up/down pair in the same geometric row.
+    // Mid-layer buttons on N>3 pass wide: tip-cap slabs 0..depth (one planar cut).
+    const wide = !!move.wide && depth > 0 && depth < this.order - 1;
+    return this.tiles.filter((tile) => {
+      const band = this.depthOfProjection(this.tileWorldCenter(tile, this.scratch).dot(axis));
+      return wide ? band <= depth : band === depth;
+    });
   }
 
   protected turnAngle(move: FaceTurnMove): number {
@@ -744,6 +814,7 @@ export class Pyraminx extends PolyPuzzle {
         depth: packed.depth,
         ...(packed.tip ? { tip: true } : {}),
         ...(packed.bottom ? { bottom: true } : {}),
+        ...(packed.wide ? { wide: true } : {}),
       });
     }
     this.emit({ type: 'scramble', text: moves.map((m) => this.notation(m)).join(' '), length });
@@ -783,6 +854,8 @@ export class Pyraminx extends PolyPuzzle {
         } else {
           label = `${f.label}${depth}`;
         }
+        // N>3 mid-layers: wide tip-cap through this depth (one planar cut, not a thin zigzag ring).
+        const wide = this.order > 3 && depth > 0 && depth < this.order - 1;
         buttons.push({
           id: f.id,
           label,
@@ -790,6 +863,7 @@ export class Pyraminx extends PolyPuzzle {
           depth: packed.depth,
           ...(packed.tip ? { tip: true } : {}),
           ...(packed.bottom ? { bottom: true } : {}),
+          ...(wide ? { wide: true } : {}),
         });
       }
     }
@@ -812,6 +886,8 @@ export class Pyraminx extends PolyPuzzle {
     bottomRoundTrip: boolean;
     order: number;
     bandCounts: number[];
+    planarCuts: boolean;
+    discreteMatch: boolean;
   } {
     this.group.updateMatrixWorld(true);
     const axis = this.faces[0].axis;
@@ -849,6 +925,33 @@ export class Pyraminx extends PolyPuzzle {
     const bandCounts = Array.from({ length: this.order }, (_, d) =>
       this.tiles.filter((t) => this.inDepth(this.tileWorldCenter(t, this.scratch).dot(axis), d)).length,
     );
+    // Planar cut check: adjacent bands must not interleave in tip-axis projection.
+    let planarCuts = true;
+    for (let d = 0; d < this.order - 1; d++) {
+      const a = this.tiles
+        .filter((t) => this.inDepth(this.tileWorldCenter(t, this.scratch).dot(axis), d))
+        .map((t) => this.tileWorldCenter(t, this.scratch).dot(axis));
+      const b = this.tiles
+        .filter((t) => this.inDepth(this.tileWorldCenter(t, this.scratch).dot(axis), d + 1))
+        .map((t) => this.tileWorldCenter(t, this.scratch).dot(axis));
+      if (!a.length || !b.length) {
+        planarCuts = false;
+        break;
+      }
+      if (Math.min(...a) <= Math.max(...b)) {
+        planarCuts = false;
+        break;
+      }
+    }
+    // Discrete tipDepth vs projection band agreement (solved state).
+    let discreteMatch = true;
+    for (const tile of this.pyraTiles) {
+      const projBand = this.depthOfProjection(this.tileWorldCenter(tile, this.scratch).dot(axis));
+      if (tile.tipDepth[0] !== projBand) {
+        discreteMatch = false;
+        break;
+      }
+    }
     return {
       tipCount: tip.length,
       deepCount: deep.length,
@@ -864,6 +967,8 @@ export class Pyraminx extends PolyPuzzle {
       bottomRoundTrip: roundTrip(bottom),
       order: this.order,
       bandCounts,
+      planarCuts,
+      discreteMatch,
     };
   }
 

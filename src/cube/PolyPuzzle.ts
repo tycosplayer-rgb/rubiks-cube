@@ -268,6 +268,7 @@ export abstract class PolyPuzzle implements Puzzle {
     tip?: boolean;
     bottom?: boolean;
     depth?: number;
+    wide?: boolean;
   }): boolean {
     if (this.busy || this.locked || this.dragging || this.turnAnim || this.interactive) return false;
     if (!this.faces.some((f) => f.id === skeleton.face)) return false;
@@ -278,6 +279,7 @@ export abstract class PolyPuzzle implements Puzzle {
       ...(skeleton.depth !== undefined ? { depth: skeleton.depth } : {}),
       ...(skeleton.tip ? { tip: true } : {}),
       ...(skeleton.bottom ? { bottom: true } : {}),
+      ...(skeleton.wide ? { wide: true } : {}),
     };
     const selected = this.selectLayer(move);
     if (!selected.length) return false;

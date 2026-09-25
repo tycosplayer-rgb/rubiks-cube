@@ -615,16 +615,80 @@ function smokeOrder(N) {
   });
   let drift = 0;
   for (let i = 0; i < before.length; i++) drift = Math.max(drift, before[i].distanceTo(after[i]));
+
+  // Mid-layer: exact band non-empty; for N>3 wide tip-cap is a contiguous slab 0..mid
+  // with planar cut (no interleave with band mid+1).
+  const mid = Math.min(3, N - 1);
+  const exactMid = q['selectLayer']({ kind: 'face', face: 'U', steps: 1, depth: mid }).length;
+  let wideOk = true;
+  if (N > 3 && mid > 0 && mid < N - 1) {
+    const wideSel = q['selectLayer']({ kind: 'face', face: 'U', steps: 1, depth: mid, wide: true });
+    const expectWide = vv.bandCounts.slice(0, mid + 1).reduce((s, c) => s + c, 0);
+    const wideProjs = wideSel.map((t) => {
+      const c = new THREE.Vector3();
+      const attr = t.mesh.geometry.getAttribute('position');
+      for (let i = 0; i < attr.count; i++) c.add(new THREE.Vector3().fromBufferAttribute(attr, i));
+      return c.multiplyScalar(1 / attr.count).applyMatrix4(t.mesh.matrixWorld).dot(axis);
+    });
+    const below = q['tiles']
+      .filter((t) => !wideSel.includes(t))
+      .map((t) => {
+        const c = new THREE.Vector3();
+        const attr = t.mesh.geometry.getAttribute('position');
+        for (let i = 0; i < attr.count; i++) c.add(new THREE.Vector3().fromBufferAttribute(attr, i));
+        return c.multiplyScalar(1 / attr.count).applyMatrix4(t.mesh.matrixWorld).dot(axis);
+      });
+    const wideMin = Math.min(...wideProjs);
+    const belowMax = Math.max(...below.filter((d) => d < wideMin + 1)); // neighbors below
+    // Contiguous slab: every selected proj > every band-(mid+1) sticker proj
+    const bandBelow = q['tiles']
+      .map((t) => {
+        const c = new THREE.Vector3();
+        const attr = t.mesh.geometry.getAttribute('position');
+        for (let i = 0; i < attr.count; i++) c.add(new THREE.Vector3().fromBufferAttribute(attr, i));
+        return c.multiplyScalar(1 / attr.count).applyMatrix4(t.mesh.matrixWorld).dot(axis);
+      })
+      .filter((d) => {
+        // depthOf via thresh
+        const th = q.debugThresholds().all;
+        let band = N - 1;
+        if (d > th[0]) band = 0;
+        else {
+          for (let k = 1; k < th.length; k++) if (d > th[k]) { band = k; break; }
+        }
+        return band === mid + 1;
+      });
+    const noInterleave = bandBelow.length === 0 || Math.min(...wideProjs) > Math.max(...bandBelow);
+    wideOk =
+      wideSel.length === expectWide &&
+      exactMid === vv.bandCounts[mid] &&
+      noInterleave &&
+      q.getFaceButtons().some((b) => b.depth === mid && b.wide === true);
+  }
+
   const ok =
     vv.order === N &&
     vv.bandCounts.length === N &&
     vv.bandCounts.every((c) => c > 0) &&
+    vv.planarCuts === true &&
+    vv.discreteMatch === true &&
     tipN > 0 &&
     botN > 0 &&
     tipN === 3 &&
     drift < 0.05 &&
-    q.getFaceButtons().length === N * 4;
-  console.log('smokeOrder', N, { bands: vv.bandCounts, tipN, botN, drift, ok });
+    q.getFaceButtons().length === N * 4 &&
+    wideOk;
+  console.log('smokeOrder', N, {
+    bands: vv.bandCounts,
+    tipN,
+    botN,
+    drift,
+    planarCuts: vv.planarCuts,
+    discreteMatch: vv.discreteMatch,
+    exactMid,
+    wideOk,
+    ok,
+  });
   return ok;
 }
 const smoke2 = smokeOrder(2);

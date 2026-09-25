@@ -247,14 +247,15 @@ function renderFaceControls(): void {
   faceControls.innerHTML = buttons.map((b) => `
     <span class="face-turn-pair" style="--face-color:${b.color}">
       <b>${b.label}</b>
-      <button type="button" data-face="${b.id}" data-tip="${b.tip ? '1' : '0'}" data-bottom="${b.bottom ? '1' : '0'}" data-depth="${b.depth !== undefined ? b.depth : ''}" data-dir="1" aria-label="${b.label} 顺时针">↻</button>
-      <button type="button" data-face="${b.id}" data-tip="${b.tip ? '1' : '0'}" data-bottom="${b.bottom ? '1' : '0'}" data-depth="${b.depth !== undefined ? b.depth : ''}" data-dir="-1" aria-label="${b.label} 逆时针">↺</button>
+      <button type="button" data-face="${b.id}" data-tip="${b.tip ? '1' : '0'}" data-bottom="${b.bottom ? '1' : '0'}" data-depth="${b.depth !== undefined ? b.depth : ''}" data-wide="${b.wide ? '1' : '0'}" data-dir="1" aria-label="${b.label} 顺时针">↻</button>
+      <button type="button" data-face="${b.id}" data-tip="${b.tip ? '1' : '0'}" data-bottom="${b.bottom ? '1' : '0'}" data-depth="${b.depth !== undefined ? b.depth : ''}" data-wide="${b.wide ? '1' : '0'}" data-dir="-1" aria-label="${b.label} 逆时针">↺</button>
     </span>`).join('');
   faceControls.querySelectorAll<HTMLButtonElement>('button').forEach((button) => button.addEventListener('click', () => {
     const face = button.dataset.face!;
     const steps = Number(button.dataset.dir);
     const tip = button.dataset.tip === '1';
     const bottom = button.dataset.bottom === '1';
+    const wide = button.dataset.wide === '1';
     const depthStr = button.dataset.depth ?? '';
     const depth = depthStr === '' ? undefined : Number(depthStr);
     void puzzle.applyMove({
@@ -264,6 +265,7 @@ function renderFaceControls(): void {
       ...(depth !== undefined && Number.isFinite(depth) ? { depth } : {}),
       ...(tip ? { tip: true } : {}),
       ...(bottom ? { bottom: true } : {}),
+      ...(wide ? { wide: true } : {}),
     }, true);
   }));
 }
