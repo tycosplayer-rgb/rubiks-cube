@@ -157,15 +157,15 @@ async function solveOneFace(
 
     const path = await bfsImproveFace(work, target, preserve, moves, {
       ...opts,
-      maxDepth: work.N <= 4 ? 10 : 14,
-      maxStates: work.N <= 4 ? 150_000 : 600_000,
+      maxDepth: work.N <= 4 ? 10 : 10,
+      maxStates: work.N <= 4 ? 150_000 : 80_000,
     });
     if (!path) {
       // Try deeper one-shot to fully solve
       const path2 = await bfsImproveFace(work, target, preserve, moves, {
         ...opts,
-        maxDepth: work.N <= 4 ? 14 : 18,
-        maxStates: work.N <= 4 ? 400_000 : 1_200_000,
+        maxDepth: work.N <= 4 ? 14 : 12,
+        maxStates: work.N <= 4 ? 400_000 : 200_000,
       });
       if (!path2) return false;
       work.applyAlgo(path2);
@@ -235,7 +235,7 @@ async function solveLastCentersCommutator(
   const last = { t: Date.now() };
   while (q.length) {
     if (opts.shouldAbort() || Date.now() > opts.deadline) return null;
-    if (processed > 500_000) return null;
+    if (processed > (N <= 4 ? 500_000 : 100_000)) return null;
     const node = q.shift()!;
     processed++;
     await yieldIfNeeded(last);

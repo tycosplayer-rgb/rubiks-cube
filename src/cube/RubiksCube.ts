@@ -609,8 +609,9 @@ export class RubiksCube implements Puzzle {
           moves = reverseHistory(this.history);
           method = '逆序还原打乱路径';
         }
-      } else if (this.order === 4 || this.order === 5) {
-        const label = this.order === 4 ? '还原法（四阶）' : '还原法（五阶）';
+      } else if (this.order === 4) {
+        // 四阶：仍优先还原法，失败再回退逆序历史（行为不变）
+        const label = '还原法（四阶）';
         this.emit({ type: 'status', message: `${label} · 分析状态…` });
         const facelet = snapshotCube(
           this.order,
@@ -642,6 +643,38 @@ export class RubiksCube implements Puzzle {
               : `${label}失败（无历史可回退）`,
           });
           return;
+        }
+      } else if (this.order === 5) {
+        // 五阶：有打乱历史时直接逆序还原，避免浏览器里跑几十秒还原法
+        if (this.history.length > 0) {
+          moves = reverseHistory(this.history);
+          method = '逆序还原打乱路径';
+        } else {
+          const label = '还原法（五阶）';
+          this.emit({ type: 'status', message: `${label} · 分析状态…` });
+          const facelet = snapshotCube(
+            this.order,
+            this.cubies.map((c) => ({ mesh: c.mesh, ix: c.ix, iy: c.iy, iz: c.iz })),
+          );
+          const result = await solveNxN(facelet, {
+            // 无历史可回退；缩短 deadline，避免空等 90s
+            deadlineMs: 30_000,
+            shouldAbort: () => this.abortSolve,
+            onProgress: (msg) => this.emit({ type: 'status', message: msg }),
+          });
+          if (this.abortSolve) return;
+          if (result.moves.length > 0 && !result.error) {
+            moves = result.moves;
+            method = result.method;
+          } else {
+            this.emit({
+              type: 'status',
+              message: result.error
+                ? `${label}失败：${result.error}`
+                : `${label}失败（无历史可回退）`,
+            });
+            return;
+          }
         }
       } else {
         moves = reverseHistory(this.history);

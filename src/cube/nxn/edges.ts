@@ -362,7 +362,13 @@ async function solveEdgePairingOnce(
           deadline: opts.deadline,
           shouldAbort: opts.shouldAbort,
           maxDepth: before >= 8 ? 10 : 7,
-          maxNodes: before >= 8 ? 120_000 : 50_000,
+          maxNodes: N <= 4
+            ? before >= 8
+              ? 120_000
+              : 50_000
+            : before >= 8
+              ? 60_000
+              : 25_000,
         });
         if (path) {
           best = path;
@@ -378,7 +384,13 @@ async function solveEdgePairingOnce(
         deadline: opts.deadline,
         shouldAbort: opts.shouldAbort,
         maxDepth: before >= 10 ? 14 : 10,
-        maxNodes: before >= 10 ? 400_000 : 200_000,
+        maxNodes: N <= 4
+          ? before >= 10
+            ? 400_000
+            : 200_000
+          : before >= 10
+            ? 200_000
+            : 100_000,
       });
       if (path) {
         best = path;
@@ -392,7 +404,13 @@ async function solveEdgePairingOnce(
         deadline: opts.deadline,
         shouldAbort: opts.shouldAbort,
         maxDepth: before >= 10 ? 10 : 7,
-        maxNodes: before >= 10 ? 150_000 : 60_000,
+        maxNodes: N <= 4
+          ? before >= 10
+            ? 150_000
+            : 60_000
+          : before >= 10
+            ? 75_000
+            : 30_000,
       });
       if (path) {
         best = path;
@@ -446,7 +464,7 @@ async function solveEdgePairingOnce(
         deadline: opts.deadline,
         shouldAbort: opts.shouldAbort,
         maxDepth: 12,
-        maxNodes: 250_000,
+        maxNodes: N <= 4 ? 250_000 : 125_000,
       });
       if (path) {
         const trial = work.clone();
