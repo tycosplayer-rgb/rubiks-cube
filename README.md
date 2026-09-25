@@ -27,7 +27,7 @@
 
 ### 方块魔方
 - 阶数 2–20；色块拖动转层
-- 3×3 使用 cubejs / Kociemba；其它阶数逆序回放历史
+- 2×2 / 3×3 使用 cubejs / Kociemba（二阶映射为同面外层转动的 3×3 角块）；N≥4 逆序回放历史
 - 保留短路径逆时针动画、安全重挂载、统一 rAF、MSAA、底部补光等优化
 
 ### 金字塔 / 十二面体
@@ -66,7 +66,7 @@ npm run preview
 
 - Vite + TypeScript
 - Three.js / OrbitControls
-- cubejs（仅方块 3×3）
+- cubejs（方块 2×2 / 3×3）
 
 ### 金字塔（Pyraminx）
 - 阶数 **2–20**（默认 3）；面细分 `n = N`，沿每条尖轴按投影分为 **N 个深度带**（0=尖 … N-1=底）
@@ -92,5 +92,6 @@ npm run preview
 ```bash
 npx tsx scripts/verify-pyraminx.mjs
 npx tsx scripts/verify-megaminx.mjs
+npx tsx scripts/verify-cubejs-2x2.mjs
 ```
 

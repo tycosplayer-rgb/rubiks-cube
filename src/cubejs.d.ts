@@ -6,6 +6,7 @@ declare module 'cubejs' {
     randomize(): this;
     asString(): string;
     solve(maxDepth?: number): string;
+    isSolved(): boolean;
     static initSolver(): void;
     static scramble(): string;
     static fromString(str: string): Cube;

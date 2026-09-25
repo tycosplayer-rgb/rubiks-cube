@@ -89,11 +89,16 @@ export function parseAlgorithm(algo: string, order: number): LayerMove[] {
   return moves;
 }
 
+/**
+ * Map a layer move to cubejs notation.
+ * Pocket cube (N=2) = 3×3 corners under the same outer face turns: layers 0 and
+ * order-1 map to opposite faces (D/L/B vs U/R/F). N=3 also maps mid slices M/E/S.
+ */
 export function layerMoveToCubejs(move: LayerMove, order: number): string | null {
-  if (order !== 3) return null;
+  if (order !== 2 && order !== 3) return null;
 
-  // Middle slices: M (x mid), E (y mid), S (z mid)
-  if (move.layer === 1) {
+  // 3×3 middle slices: M (x mid), E (y mid), S (z mid)
+  if (order === 3 && move.layer === 1) {
     // Convention matching cubejs: M follows L (cw from L), E follows D, S follows F
     const slice = move.axis === 'x' ? 'M' : move.axis === 'y' ? 'E' : 'S';
     // L/D are -faces (cwIsNegative=false); F is +face (cwIsNegative=true)
@@ -107,10 +112,13 @@ export function layerMoveToCubejs(move: LayerMove, order: number): string | null
     return `${slice}'`;
   }
 
+  // Outer faces only (N=2 both layers; N=3 layers 0 and 2)
+  if (move.layer !== 0 && move.layer !== order - 1) return null;
+
   const face = (() => {
-    if (move.axis === 'y') return move.layer === 2 ? 'U' : 'D';
-    if (move.axis === 'x') return move.layer === 2 ? 'R' : 'L';
-    return move.layer === 2 ? 'F' : 'B';
+    if (move.axis === 'y') return move.layer === order - 1 ? 'U' : 'D';
+    if (move.axis === 'x') return move.layer === order - 1 ? 'R' : 'L';
+    return move.layer === order - 1 ? 'F' : 'B';
   })();
   const cwIsNeg = face === 'U' || face === 'R' || face === 'F';
   let cw: number;

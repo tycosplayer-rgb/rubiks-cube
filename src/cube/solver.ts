@@ -7,6 +7,7 @@ type CubeClass = {
   new (): {
     move(algorithm: string): unknown;
     solve(maxDepth?: number): string;
+    isSolved(): boolean;
   };
   initSolver(): void;
   scramble(): string;
@@ -36,7 +37,7 @@ export function isSolverReady(): boolean {
   return solverReady;
 }
 
-/** Track parallel cubejs state for 3×3 */
+/** Track parallel cubejs state for 2×2 (corners via outer faces) and 3×3 */
 export class CubejsTracker {
   private cube: InstanceType<CubeClass>;
 
@@ -49,16 +50,19 @@ export class CubejsTracker {
   }
 
   apply(move: LayerMove, order: number): void {
-    if (order !== 3) return;
+    if (order !== 2 && order !== 3) return;
     const n = layerMoveToCubejs(move, order);
     if (n) this.cube.move(n);
   }
 
-  async solve(): Promise<LayerMove[]> {
+  async solve(order = 3): Promise<LayerMove[]> {
     await ensureSolver();
+    // cubejs.solve() can return a non-empty identity-ish string on a solved cube;
+    // trust isSolved() (and empty algo) instead of treating that as a real solution.
+    if (this.cube.isSolved()) return [];
     const algo = this.cube.solve();
     if (!algo || !algo.trim()) return [];
-    return parseAlgorithm(algo, 3);
+    return parseAlgorithm(algo, order);
   }
 }
 

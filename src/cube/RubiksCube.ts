@@ -595,13 +595,19 @@ export class RubiksCube implements Puzzle {
       let moves: LayerMove[] = [];
       let method = '';
 
-      if (this.order === 3) {
+      if (this.order === 2 || this.order === 3) {
         this.emit({ type: 'status', message: '正在初始化求解器…' });
         await ensureSolver();
         if (this.abortSolve) return;
         this.emit({ type: 'status', message: 'Kociemba 求解中…' });
-        moves = await this.tracker.solve();
-        method = 'Kociemba (cubejs)';
+        moves = await this.tracker.solve(this.order);
+        method = this.order === 2 ? 'Kociemba (cubejs·二阶)' : 'Kociemba (cubejs)';
+        // Prefer real solver; fall back to reverse history only if cubejs gave nothing
+        // while the cube is still scrambled and we have recorded moves.
+        if (moves.length === 0 && this.history.length > 0 && !this.isSolved()) {
+          moves = reverseHistory(this.history);
+          method = '逆序还原打乱路径';
+        }
       } else {
         moves = reverseHistory(this.history);
         method = '逆序还原打乱路径';
