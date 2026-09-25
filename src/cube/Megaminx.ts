@@ -41,6 +41,8 @@ interface MegaTile extends PolyTile {
   pieceId: string;
   kind: 'center' | 'edge' | 'corner' | 'ring';
   faceIndex: number;
+  /** Even-N tip-touch ring at outer edge mid — outer band only (skip 2U/3U). */
+  touchesOuter?: boolean;
 }
 
 /**
@@ -51,10 +53,12 @@ interface MegaTile extends PolyTile {
  *       Even: N/2 parallels/dir (k=1..N/2, stop at bisector). Odd: outermost (N−1)/2
  *       (N=4 → 2/dir; N=6 → 3/dir; N=5 Gigaminx → 2/dir → 31/face; N=7 → 61/face).
  * Even N≥4 (N=4,6,…): ★-shaped center void (挖空) — no center sticker/piece;
- *       drop lattice cells whose centroid lies inside the star (tips→edge
- *       midpoints STAR_TIP_SCALE=1; dents STAR_DENT_SCALE≈0.20). Outer
- *       corners/mid-edges keep original parallel-lattice geometry (切块位置不变).
- *       Near-black core shows through. Odd N≥5 (Gigaminx/Teraminx): filled center.
+ *       drop interior lattice cells whose centroid lies inside the star
+ *       (tips→edge midpoints STAR_TIP_SCALE=1; dents STAR_DENT_SCALE≈0.20).
+ *       Never drop cells that touch an outer edge (tip-touch rings at midpoints
+ *       stay) so ★ tips 挨到棱 do not open a black edge gap. Those tip rings
+ *       are outer-band only (excluded from 2U/3U). Outer lattice cuts unchanged.
+ *       Odd N≥5 (Gigaminx/Teraminx): filled center.
  *
  * Face turns 72°. Turnable layers per face axis: L = ⌊N/2⌋ (depth 0 = outer face;
  * depth 1..L-1 = successive thin lattice-step rings — not equal half-puzzle slabs).
@@ -705,8 +709,11 @@ export class Megaminx extends PolyPuzzle {
     });
 
     // Even N≥4: ★-shaped center void (挖空). Same parallel lattice cuts; omit
-    // center sticker entirely and drop any cell whose centroid lies inside the
-    // star. Outer corners / mid-edges keep original k/N geometry. No overlay.
+    // center sticker entirely and drop interior in-star cells. Never drop
+    // outer-edge-touching cells (tip-touch rings at midpoints) — otherwise ★
+    // tips 挨到棱 open black edge gaps. Tip rings are tagged touchesOuter so
+    // inner depth bands skip them. No overlay.
+    const outerTouchRingIds = new Set<string>();
     if (N % 2 === 0 && N >= 4) {
       const tip2: V2[] = [];
       const dent2: V2[] = [];
@@ -734,9 +741,23 @@ export class Megaminx extends PolyPuzzle {
         }
         return inside;
       };
+      /** True if any vertex lies on an outer edge (span or tip-touch at mid). */
+      const polyTouchesOuterEdge = (poly: V2[]): boolean => {
+        for (let ei = 0; ei < 5; ei++) {
+          if (polyEdgeSpan(poly, ei) > 1e-4) return true;
+          for (const p of poly) {
+            if (Math.abs(edgeDist(p, ei)) < 1e-4) return true;
+          }
+        }
+        return false;
+      };
       const kept = classified.filter((cell) => {
         if (cell.kind === 'center') return false; // even-N: no center piece
         if (cell.kind === 'corner' || cell.kind === 'edge') return true;
+        if (polyTouchesOuterEdge(cell.poly)) {
+          if (cell.kind === 'ring') outerTouchRingIds.add(cell.pieceId);
+          return true;
+        }
         return !pointInStar(cell.cen);
       });
       classified.length = 0;
@@ -762,6 +783,11 @@ export class Megaminx extends PolyPuzzle {
         cell.pieceId,
         cell.kind,
       );
+      if (outerTouchRingIds.has(cell.pieceId)) {
+        const tile = this.megaTiles[this.megaTiles.length - 1];
+        tile.touchesOuter = true;
+        tile.mesh.userData.touchesOuter = true;
+      }
     }
   }
 
@@ -954,16 +980,29 @@ export class Megaminx extends PolyPuzzle {
 
     // Inner band: by piece maxProj. Skip face-centers of other faces — they
     // sit mid-projection but must stay fixed (only their own face turns them).
-    const pieceMax = new Map<string, { maxProj: number; kind: MegaTile['kind'] }>();
+    const pieceMax = new Map<
+      string,
+      { maxProj: number; kind: MegaTile['kind']; touchesOuter?: boolean }
+    >();
     for (const t of this.megaTiles) {
       const p = this.tileWorldCenter(t, this.scratch).dot(axis);
       const cur = pieceMax.get(t.pieceId);
-      if (!cur) pieceMax.set(t.pieceId, { maxProj: p, kind: t.kind });
-      else cur.maxProj = Math.max(cur.maxProj, p);
+      if (!cur) {
+        pieceMax.set(t.pieceId, {
+          maxProj: p,
+          kind: t.kind,
+          touchesOuter: t.touchesOuter,
+        });
+      } else {
+        cur.maxProj = Math.max(cur.maxProj, p);
+        if (t.touchesOuter) cur.touchesOuter = true;
+      }
     }
     const pieces = new Set<string>();
     for (const [id, info] of pieceMax) {
       if (info.kind === 'center') continue;
+      // Tip-touch outer rings belong to the outer edge band only — not 2U/3U.
+      if (info.kind === 'ring' && info.touchesOuter) continue;
       if (this.depthOfProjection(info.maxProj) === depth) pieces.add(id);
     }
     return this.megaTiles.filter((t) => pieces.has(t.pieceId));
@@ -1089,11 +1128,12 @@ export class Megaminx extends PolyPuzzle {
     const N = this.order;
     if (N === 2) return 5;
     if (N === 3) return 11;
-    // Even N≥4: parallel lattice hollowed by ★ void (no center; in-star rings dropped).
-    // N=4 → 20; N=5 → 31; N=6 → 45 (3 lines/dir to bisector); N=7 → 61.
-    if (N === 4) return 20;
+    // Even N≥4: parallel lattice hollowed by ★ void (no center; interior
+    // in-star rings dropped; tip-touch edge rings kept).
+    // N=4 → 25; N=5 → 31; N=6 → 50 (3 lines/dir to bisector); N=7 → 61.
+    if (N === 4) return 25;
     if (N === 5) return 31;
-    if (N === 6) return 45;
+    if (N === 6) return 50;
     if (N === 7) return 61;
     if (N % 2 === 0) {
       return 5 + 5 * (N - 2) + 1 + 5 * (N - 2) * (N / 2 - 1);
@@ -1195,15 +1235,15 @@ export class Megaminx extends PolyPuzzle {
     } else if (this.order === 2) {
       pieceGraphOk = pieceGraphOk && kinds.corner === 60 && kinds.center === 0 && kinds.edge === 0;
     } else if (this.order === 4) {
-      // Parallel lattice + ★ void: 5 corners + 10 edges + 0 center + 5 rings / face → 20
-      // Totals: center 0, corner 60, edge 120, ring 60
+      // Parallel lattice + ★ void: 5 corners + 10 edges + 0 center + 10 rings / face → 25
+      // (5 bay + 5 tip-touch). Totals: center 0, corner 60, edge 120, ring 120
       pieceGraphOk =
         pieceGraphOk &&
         kinds.center === 0 &&
         kinds.corner === 60 &&
         kinds.edge === 120 &&
-        kinds.ring === 60 &&
-        this.expectedPerFace() === 20;
+        kinds.ring === 120 &&
+        this.expectedPerFace() === 25;
     } else if (this.order === 5) {
       // Parallel lattice (2 lines/dir): 5 corners + 15 edges + 1 center + 10 rings / face → 31
       // Totals: center 12, corner 60, edge 180, ring 120
@@ -1215,15 +1255,15 @@ export class Megaminx extends PolyPuzzle {
         kinds.ring === 120 &&
         this.expectedPerFace() === 31;
     } else if (this.order === 6) {
-      // Parallel lattice + ★ void (3 lines/dir to bisector): 5 corners + 20 edges + 0 center + 20 rings / face → 45
-      // Totals: center 0, corner 60, edge 240, ring 240
+      // Parallel lattice + ★ void (3 lines/dir to bisector): 5 corners + 20 edges + 0 center + 25 rings / face → 50
+      // (20 interior + 5 tip-touch). Totals: center 0, corner 60, edge 240, ring 300
       pieceGraphOk =
         pieceGraphOk &&
         kinds.center === 0 &&
         kinds.corner === 60 &&
         kinds.edge === 240 &&
-        kinds.ring === 240 &&
-        this.expectedPerFace() === 45;
+        kinds.ring === 300 &&
+        this.expectedPerFace() === 50;
     } else if (this.order === 7) {
       // Parallel lattice (3 lines/dir): 5 corners + 25 edges + 1 center + 30 rings / face → 61
       pieceGraphOk =

@@ -1094,9 +1094,9 @@ function assertMultiDepth(N) {
       '2R': { tiles: r2Tiles.length, pieces: r2Pieces },
       thresh: thresh.map((t) => +t.toFixed(4)),
     });
-    // N=4: thin 2R ring ≈ 20 tiles / 15 pieces (not ~100 tiles)
+    // N=4: outer includes tip-touch rings (45/25); thin 2R unchanged 20/15
     if (N === 4) {
-      if (rTiles.length !== 40 || rPieces !== 20) {
+      if (rTiles.length !== 45 || rPieces !== 25) {
         console.error('multiDepth', N, 'R counts', rTiles.length, rPieces);
         return false;
       }
@@ -1111,9 +1111,9 @@ function assertMultiDepth(N) {
         return false;
       }
     }
-    // N=6 ★ void (3 lines/dir to bisector): U/2U/3U thin bands; outer 75 tiles / 45 pieces
+    // N=6 ★ void (3 lines/dir; tip-touch rings kept): outer 80/50; 2R/3R thin 30/25
     if (N === 6) {
-      if (rTiles.length !== 75 || rPieces !== 45) {
+      if (rTiles.length !== 80 || rPieces !== 50) {
         console.error('multiDepth', N, 'R counts', rTiles.length, rPieces);
         return false;
       }
